@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.egg-info/
+dist/
+.venv/
+*.pyc
+
+# Node
+node_modules/
+
+# Cloudflare
+.wrangler/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

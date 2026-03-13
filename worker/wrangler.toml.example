@@ -1,0 +1,39 @@
+name = "cf-browser"
+main = "src/index.ts"
+compatibility_date = "2026-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# -------------------------------------------------------------------
+# Secrets (set via: wrangler secret put <NAME>)
+# -------------------------------------------------------------------
+#   CF_ACCOUNT_ID  — Your Cloudflare account ID
+#                    Find it: wrangler whoami
+#
+#   CF_API_TOKEN   — API token with Browser Rendering permission
+#                    Create at: https://dash.cloudflare.com/profile/api-tokens
+#                    Required permission: Account > Workers Browser Rendering > Edit
+#                    (In Chinese dashboard: 帳戶 > 瀏覽器轉譯 > 編輯)
+#
+#   API_KEYS       — Comma-separated API keys for client authentication
+#                    Generate: openssl rand -hex 32
+# -------------------------------------------------------------------
+
+# Create these resources, then paste the IDs below:
+#   wrangler kv namespace create CACHE
+#   wrangler kv namespace create RATE_LIMIT
+#   wrangler r2 bucket create cf-browser-storage
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = ""  # ← paste your CACHE namespace ID
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = ""  # ← paste your RATE_LIMIT namespace ID
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "cf-browser-storage"
+
+[dev]
+port = 8787
