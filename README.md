@@ -1,8 +1,10 @@
 # CF Browser
 
-Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 9 MCP tools for JavaScript-rendered web pages.
+> Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools** for JavaScript-rendered web pages.
 
-Claude Code's built-in `WebFetch` only returns raw HTML. Single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser solves this by wrapping [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) behind a Worker proxy with auth, caching, and rate limiting, then exposing everything as MCP tools.
+**[繁體中文版 README](README.zh-TW.md)**
+
+Claude Code's built-in `WebFetch` only returns raw HTML — single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser wraps [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) behind a Worker proxy with auth, caching, and rate limiting, then exposes everything as MCP tools.
 
 ## Architecture
 
@@ -11,7 +13,7 @@ Claude Code
   └── MCP Server (9 tools)
          │ HTTP + Bearer token
          ▼
-  Cloudflare Worker
+  Cloudflare Worker (Edge)
   ├── Auth middleware (API key, timing-safe)
   ├── Rate limiting (KV, 60 req/min)
   └── Cache (KV for text, R2 for binary)
@@ -20,26 +22,89 @@ Claude Code
   CF Browser Rendering API (headless Chrome)
 ```
 
-Three independent packages:
-
 | Package | Language | Purpose |
 |---------|----------|---------|
 | `worker/` | TypeScript (Hono) | Edge proxy with auth, cache, rate limiting |
 | `sdk/` | Python (httpx) | Async client library |
 | `mcp-server/` | Python (FastMCP) | 9 MCP tools for Claude Code |
 
-## Quick Start
+## MCP Tools
 
-### Prerequisites
+| Tool | Input | Output | Use case |
+|------|-------|--------|----------|
+| `browser_markdown` | url | Markdown | Read any web page as clean text |
+| `browser_content` | url | HTML | Get fully rendered HTML (JS executed) |
+| `browser_screenshot` | url, width, height | PNG file | Visual verification, multi-device testing |
+| `browser_pdf` | url, format | PDF file | Generate reports, archive pages |
+| `browser_scrape` | url, selectors[] | JSON | Extract specific elements by CSS selector |
+| `browser_json` | url, prompt | JSON | AI-powered structured data extraction |
+| `browser_links` | url | JSON array | Discover all hyperlinks on a page |
+| `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
+| `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
+
+### What you can ask Claude Code
+
+```
+"Read the React 19 migration guide"
+→ browser_markdown("https://react.dev/blog/2024/12/05/react-19")
+
+"Show me what our homepage looks like on mobile"
+→ browser_screenshot("https://example.com", width=375, height=667)
+
+"Extract the top 5 products with name, price, and rating"
+→ browser_json("https://example.com/products", prompt="Extract top 5 products...")
+
+"Find all broken links on our site"
+→ browser_crawl("https://example.com", limit=50) + browser_crawl_status(job_id, wait=True)
+```
+
+## Setup
+
+### Option A: Connect to an existing Worker (2 minutes)
+
+If someone has already deployed the Worker (e.g. a teammate), you only need the URL and API key:
+
+```bash
+# Install into a dedicated venv
+python3 -m venv ~/.cf-browser-venv
+~/.cf-browser-venv/bin/pip install \
+  "cf-browser @ git+https://github.com/claude-world/cf-browser.git#subdirectory=sdk" \
+  "cf-browser-mcp @ git+https://github.com/claude-world/cf-browser.git#subdirectory=mcp-server"
+```
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cf-browser": {
+      "type": "stdio",
+      "command": "~/.cf-browser-venv/bin/python",
+      "args": ["-m", "cf_browser_mcp.server"],
+      "env": {
+        "CF_BROWSER_URL": "https://cf-browser.<subdomain>.workers.dev",
+        "CF_BROWSER_API_KEY": "<your-api-key>"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Code — 9 `browser_*` tools ready.
+
+### Option B: Deploy your own Worker (5 minutes)
+
+#### Prerequisites
 
 - Node.js 18+, Python 3.10+
 - Cloudflare account with [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) enabled
-- `wrangler` CLI authenticated (`npm i -g wrangler && wrangler login`)
+- `wrangler` CLI (`npm i -g wrangler && wrangler login`)
 
-### Step 1: Deploy the Worker
+#### Step 1: Deploy the Worker
 
 ```bash
-cd worker
+git clone https://github.com/claude-world/cf-browser.git
+cd cf-browser/worker
 cp wrangler.toml.example wrangler.toml
 npm install
 ```
@@ -55,14 +120,14 @@ wrangler r2 bucket create cf-browser-storage
 Set secrets:
 
 ```bash
-# Your Cloudflare account ID (shown by: wrangler whoami)
+# Account ID (shown by: wrangler whoami)
 wrangler secret put CF_ACCOUNT_ID
 
 # API token — create at https://dash.cloudflare.com/profile/api-tokens
-# Required permission: "Workers Browser Rendering Edit" (瀏覽器轉譯)
+# Required permission: Account → Workers Browser Rendering → Edit
 wrangler secret put CF_API_TOKEN
 
-# Client API key for authenticating requests to your Worker
+# Generate a client API key (save this — you'll need it for .mcp.json)
 echo "$(openssl rand -hex 32)" | wrangler secret put API_KEYS
 ```
 
@@ -80,14 +145,14 @@ curl https://cf-browser.<your-subdomain>.workers.dev/health
 # {"status":"ok","version":"1.0.0"}
 ```
 
-### Step 2: Install the SDK and MCP Server
+#### Step 2: Install SDK + MCP Server
 
 ```bash
 cd ../sdk && pip install -e .
 cd ../mcp-server && pip install -e .
 ```
 
-### Step 3: Register MCP in Claude Code
+#### Step 3: Register MCP
 
 Add to your project's `.mcp.json`:
 
@@ -107,37 +172,7 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Restart Claude Code. You'll see 9 `browser_*` tools available.
-
-## MCP Tools
-
-| Tool | Input | Output | Use case |
-|------|-------|--------|----------|
-| `browser_markdown` | url | Markdown string | Read any web page as clean text |
-| `browser_content` | url | HTML string | Get fully rendered HTML (JS executed) |
-| `browser_screenshot` | url, width, height | PNG file path | Visual verification, multi-device testing |
-| `browser_pdf` | url, format | PDF file path | Generate reports, archive pages |
-| `browser_scrape` | url, selectors[] | JSON | Extract specific elements by CSS selector |
-| `browser_json` | url, prompt | JSON | AI-powered structured data extraction |
-| `browser_links` | url | JSON array | Discover all hyperlinks on a page |
-| `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
-| `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
-
-### Examples in Claude Code
-
-```
-"Read the React 19 migration guide"
-→ browser_markdown("https://react.dev/blog/2024/12/05/react-19")
-
-"Show me what our homepage looks like on mobile"
-→ browser_screenshot("https://example.com", width=375, height=667)
-
-"Extract the top 5 products with name, price, and rating"
-→ browser_json("https://example.com/products", prompt="Extract top 5 products...")
-
-"Find all broken links on our site"
-→ browser_crawl("https://example.com", limit=50) → browser_crawl_status(job_id, wait=True)
-```
+Restart Claude Code — 9 `browser_*` tools available.
 
 ## Worker API Reference
 
@@ -168,14 +203,14 @@ curl -X POST https://cf-browser.example.workers.dev/markdown \
   -H "Content-Type: application/json" \
   -d '{"url": "https://react.dev"}'
 
-# Screenshot with viewport
+# Screenshot with custom viewport
 curl -X POST https://cf-browser.example.workers.dev/screenshot \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com", "width": 1280, "height": 720}' \
   -o screenshot.png
 
-# AI extraction
+# AI-powered structured extraction
 curl -X POST https://cf-browser.example.workers.dev/json \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
@@ -202,8 +237,8 @@ curl https://cf-browser.example.workers.dev/crawl/JOB_ID \
 
 - Set `"no_cache": true` in the request body to bypass cache
 - Cached responses include `X-Cache: HIT` header
-- Text content (HTML, Markdown, JSON) is stored in KV
-- Binary content (PNG, PDF) is stored in R2
+- Text content (HTML, Markdown, JSON) → KV storage
+- Binary content (PNG, PDF) → R2 storage
 - Completed crawl results are persisted to R2
 
 ### Rate limiting
@@ -261,8 +296,8 @@ All methods accept `no_cache=True` to bypass caching.
 
 ## Security
 
-- **Auth**: Timing-safe Bearer token comparison using SHA-256 (prevents timing attacks)
-- **Rate limiting**: Per-key tracking with hashed key material in KV (no raw keys stored)
+- **Auth**: Timing-safe Bearer token comparison using SHA-256
+- **Rate limiting**: Per-key tracking with hashed key material in KV
 - **SSRF prevention**: Only `http://` and `https://` URLs allowed
 - **Secrets**: All credentials stored via `wrangler secret put`, never in code
 
@@ -275,80 +310,40 @@ All methods accept `no_cache=True` to bypass caching.
 | R2 | 10GB storage | 10GB included |
 | Workers | 100K requests/day | 10M requests/mo |
 
-For most Claude Code usage, the free tier is sufficient.
-
 ## Development
 
-### Worker
-
 ```bash
-cd worker
-npm install
-npm run dev          # Local dev server at :8787
-npm run type-check   # TypeScript checks
-npm test             # Run tests
-```
+# Worker
+cd worker && npm install && npm test
 
-### SDK
+# SDK (28 tests)
+cd sdk && pip install -e ".[dev]" && pytest tests/ -v
 
-```bash
-cd sdk
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest tests/ -v
-```
-
-### MCP Server
-
-```bash
-cd mcp-server
-python -m venv .venv && source .venv/bin/activate
-pip install -e ../sdk     # Install SDK first
-pip install -e ".[dev]"
+# MCP Server
+cd mcp-server && pip install -e ../sdk && pip install -e ".[dev]"
 ```
 
 ## Project Structure
 
 ```
 cf-browser/
-├── worker/                  Cloudflare Worker (TypeScript)
+├── worker/                  Cloudflare Worker (TypeScript/Hono)
 │   ├── src/
-│   │   ├── index.ts         Hono app entry point
+│   │   ├── index.ts         App entry point
 │   │   ├── types.ts         Env bindings & request types
-│   │   ├── middleware/
-│   │   │   ├── auth.ts      Bearer token validation
-│   │   │   ├── cache.ts     KV/R2 cache layer
-│   │   │   └── rate-limit.ts  Per-key rate limiting
-│   │   ├── routes/
-│   │   │   ├── content.ts   POST /content → HTML
-│   │   │   ├── markdown.ts  POST /markdown → Markdown
-│   │   │   ├── screenshot.ts POST /screenshot → PNG
-│   │   │   ├── pdf.ts       POST /pdf → PDF
-│   │   │   ├── snapshot.ts  POST /snapshot → JSON
-│   │   │   ├── scrape.ts    POST /scrape → JSON
-│   │   │   ├── json.ts      POST /json → JSON (AI)
-│   │   │   ├── links.ts     POST /links → JSON
-│   │   │   └── crawl.ts     POST/GET /crawl
-│   │   └── lib/
-│   │       ├── cf-api.ts    CF Browser Rendering client
-│   │       ├── cache-key.ts SHA-256 cache keys
-│   │       └── validate-url.ts  SSRF prevention
+│   │   ├── middleware/      auth, cache, rate-limit
+│   │   ├── routes/          9 endpoint handlers
+│   │   └── lib/             CF API client, cache keys, URL validation
 │   ├── tests/
-│   ├── wrangler.toml.example
-│   └── package.json
-├── sdk/                     Python SDK
-│   ├── src/cf_browser/
-│   │   ├── client.py        Async CFBrowser client
-│   │   ├── models.py        Pydantic response models
-│   │   └── exceptions.py    Typed error hierarchy
-│   ├── tests/
-│   └── pyproject.toml
-├── mcp-server/              MCP Server
-│   ├── src/cf_browser_mcp/
-│   │   └── server.py        9 MCP tool definitions
-│   └── pyproject.toml
-├── LICENSE
-└── README.md
+│   └── wrangler.toml.example
+├── sdk/                     Python SDK (httpx + Pydantic)
+│   ├── src/cf_browser/      client, models, exceptions
+│   └── tests/test_client.py
+├── mcp-server/              MCP Server (FastMCP)
+│   └── src/cf_browser_mcp/server.py
+├── LICENSE                  MIT
+├── README.md
+└── README.zh-TW.md
 ```
 
 ## Contributing
@@ -356,7 +351,7 @@ cf-browser/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
-4. Run `npm test` (worker) and `pytest` (SDK) to verify
+4. Run `npm test` (worker) and `pytest` (SDK)
 5. Submit a pull request
 
 ## License
