@@ -1,6 +1,6 @@
 # CF Browser
 
-> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **9 個 MCP 工具 + 6 個即用 Skill**，支援 JavaScript 渲染的網頁。
+> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **10 個 MCP 工具 + 6 個即用 Skill**，支援 JavaScript 渲染的網頁。
 
 **[English README](README.md)**
 
@@ -10,7 +10,7 @@ Claude Code 內建的 `WebFetch` 只能取得原始 HTML — 單頁應用程式�
 
 ```
 Claude Code
-  └── MCP Server（9 個工具）
+  └── MCP Server（10 個工具）
          │ HTTP + Bearer token
          ▼
   Cloudflare Worker（Edge）
@@ -26,7 +26,7 @@ Claude Code
 |------|------|------|
 | `worker/` | TypeScript (Hono) | Edge 代理，含認證、快取、速率限制 |
 | `sdk/` | Python (httpx) | 非同步客戶端函式庫 |
-| `mcp-server/` | Python (FastMCP) | 9 個 MCP 工具供 Claude Code 使用 |
+| `mcp-server/` | Python (FastMCP) | 10 個 MCP 工具供 Claude Code 使用 |
 
 ## MCP 工具
 
@@ -90,7 +90,7 @@ python3 -m venv ~/.cf-browser-venv
 }
 ```
 
-重啟 Claude Code — 9 個 `browser_*` 工具即可使用。
+重啟 Claude Code — 10 個 `browser_*` 工具即可使用。
 
 ### 方案 B：自行部署 Worker（5 分鐘）
 
@@ -172,7 +172,7 @@ cd ../mcp-server && pip install -e .
 }
 ```
 
-重啟 Claude Code — 9 個 `browser_*` 工具即可使用。
+重啟 Claude Code — 10 個 `browser_*` 工具即可使用。
 
 ## Worker API 參考
 
