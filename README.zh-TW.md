@@ -1,6 +1,6 @@
 # CF Browser
 
-> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **9 個 MCP 工具**，支援 JavaScript 渲染的網頁。
+> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **9 個 MCP 工具 + 4 個即用 Skill**，支援 JavaScript 渲染的網頁。
 
 **[English README](README.md)**
 
@@ -294,6 +294,45 @@ async with CFBrowser(
 
 所有方法都接受 `no_cache=True` 來繞過快取。
 
+## Skills（附贈）
+
+CF Browser 附帶 4 個即用的 [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills)，放在 `skills/` 目錄。將 skill 資料夾複製到你專案的 `.claude/skills/` 即可啟用。
+
+| Skill | 指令 | 功能 |
+|-------|------|------|
+| **content-extractor** | `/content-extractor` | 讀取頁面、擷取結構化資料、抓取元素、發現連結 |
+| **site-auditor** | `/site-auditor` | 爬取網站並產生 SEO / 連結 / 無障礙審計報告 |
+| **doc-fetcher** | `/doc-fetcher` | 將整個文件站抓取為本地 Markdown，供 RAG 使用 |
+| **visual-qa** | `/visual-qa` | 多裝置視窗截圖（手機/平板/筆電/桌機）+ 視覺檢查 |
+
+### 安裝 Skill
+
+```bash
+# 複製單一 skill
+cp -r skills/content-extractor .claude/skills/
+
+# 或全部複製
+cp -r skills/* .claude/skills/
+```
+
+重啟 Claude Code — skill 即可作為斜線指令使用。
+
+### 工作流程範例
+
+```
+「讀取 Hono 文件並摘要路由章節」
+→ /content-extractor → browser_markdown → 乾淨摘要
+
+「審計 claude-world.com 的 SEO 問題」
+→ /site-auditor → 爬取 50 頁 → 擷取 meta 標籤 → Markdown 報告
+
+「下載 Astro 文件做離線參考」
+→ /doc-fetcher → 發現 20 頁 → 逐頁 browser_markdown → 儲存到 docs/
+
+「在手機、平板和桌機上 QA 檢查我們的網站」
+→ /visual-qa → 每頁 4 種視窗截圖 → 視覺檢查報告
+```
+
 ## 安全性
 
 - **認證**：使用 SHA-256 進行 timing-safe Bearer token 比對
@@ -341,6 +380,11 @@ cf-browser/
 │   └── tests/test_client.py
 ├── mcp-server/              MCP Server（FastMCP）
 │   └── src/cf_browser_mcp/server.py
+├── skills/                  Claude Code Skills（複製到 .claude/skills/）
+│   ├── content-extractor/   網頁內容讀取與擷取
+│   ├── site-auditor/        SEO 與連結健康審計
+│   ├── doc-fetcher/         文件抓取供 RAG 使用
+│   └── visual-qa/           多裝置視窗截圖 QA
 ├── LICENSE                  MIT
 ├── README.md
 └── README.zh-TW.md

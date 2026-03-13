@@ -1,6 +1,6 @@
 # CF Browser
 
-> Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools** for JavaScript-rendered web pages.
+> Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools + 4 ready-made Skills** for JavaScript-rendered web pages.
 
 **[繁體中文版 README](README.zh-TW.md)**
 
@@ -294,6 +294,45 @@ async with CFBrowser(
 
 All methods accept `no_cache=True` to bypass caching.
 
+## Skills (Bonus)
+
+CF Browser ships with 4 ready-made [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills) in `skills/`. Copy any skill folder into your project's `.claude/skills/` to enable it.
+
+| Skill | Command | What it does |
+|-------|---------|--------------|
+| **content-extractor** | `/content-extractor` | Read pages, extract structured data, scrape elements, discover links |
+| **site-auditor** | `/site-auditor` | Crawl a site and generate SEO/links/accessibility audit report |
+| **doc-fetcher** | `/doc-fetcher` | Fetch an entire documentation site as local markdown for RAG |
+| **visual-qa** | `/visual-qa` | Multi-viewport screenshots (mobile/tablet/laptop/desktop) with visual review |
+
+### Install a skill
+
+```bash
+# Copy one skill
+cp -r skills/content-extractor .claude/skills/
+
+# Or copy all
+cp -r skills/* .claude/skills/
+```
+
+Restart Claude Code — skills available as slash commands.
+
+### Example workflows
+
+```
+"Read the Hono docs and summarize the routing section"
+→ /content-extractor → browser_markdown → clean summary
+
+"Audit claude-world.com for SEO issues"
+→ /site-auditor → crawl 50 pages → scrape meta tags → markdown report
+
+"Download the Astro docs for offline reference"
+→ /doc-fetcher → discover 20 pages → browser_markdown each → save as docs/
+
+"QA check our site on mobile, tablet, and desktop"
+→ /visual-qa → 4 viewport screenshots per page → visual review report
+```
+
 ## Security
 
 - **Auth**: Timing-safe Bearer token comparison using SHA-256
@@ -341,6 +380,11 @@ cf-browser/
 │   └── tests/test_client.py
 ├── mcp-server/              MCP Server (FastMCP)
 │   └── src/cf_browser_mcp/server.py
+├── skills/                  Claude Code Skills (copy to .claude/skills/)
+│   ├── content-extractor/   Read & extract web content
+│   ├── site-auditor/        SEO & link health audit
+│   ├── doc-fetcher/         Fetch docs for RAG
+│   └── visual-qa/           Multi-viewport screenshot QA
 ├── LICENSE                  MIT
 ├── README.md
 └── README.zh-TW.md
