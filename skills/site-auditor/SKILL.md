@@ -22,24 +22,32 @@ browser_crawl(url, limit=50)
 → Get list of all discovered pages
 ```
 
-### Step 2: Analyze Each Page
+### Step 2: Quick Analysis from Crawl Data
 
-For each page (batch in groups of 5), use `browser_scrape` to extract:
-- `title` tag
-- `meta[name="description"]` content
-- `h1`, `h2`, `h3` headings
+The crawl results already include per-page `metadata` with title, OG tags, and HTTP status.
+Parse these first — this covers 80% of SEO checks with zero extra API calls:
+- `metadata.title` → check for missing/duplicate titles
+- `metadata.og:title`, `og:description`, `og:image` → check OG completeness
+- `metadata.status` → identify 4xx/5xx error pages
+- `metadata.url` → detect redirect chains (final URL != original)
+
+### Step 3: Deep Scrape (only pages with issues)
+
+For pages where crawl metadata is insufficient, use `browser_scrape` to extract:
+- `h1`, `h2`, `h3` headings (hierarchy check)
 - `img` tags (check alt attributes)
-- `meta[property^="og:"]` OpenGraph tags
 - `link[rel="canonical"]` canonical URL
 - `meta[name="robots"]` directives
+- `meta[name="description"]` (if not in crawl metadata)
 
-### Step 3: Check Links
+Batch scrape in groups of 5 to respect rate limits.
 
-Using `browser_links` on key pages:
+### Step 4: Check Links
+
+Using `browser_links` on 3-5 key pages (homepage, major sections):
 - Categorize: internal, external, resource
-- Identify potential broken links (relative URLs with no target)
-- Detect redirect chains
-- Find orphan pages (not linked from any other page)
+- Cross-reference with crawl results to find orphan pages
+- Identify links pointing to 4xx/5xx pages found in Step 2
 
 ### Step 4: Generate Report
 

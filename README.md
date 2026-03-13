@@ -1,6 +1,6 @@
 # CF Browser
 
-> Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools + 4 ready-made Skills** for JavaScript-rendered web pages.
+> Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools + 6 ready-made Skills** for JavaScript-rendered web pages.
 
 **[繁體中文版 README](README.zh-TW.md)**
 
@@ -296,7 +296,7 @@ All methods accept `no_cache=True` to bypass caching.
 
 ## Skills (Bonus)
 
-CF Browser ships with 4 ready-made [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills) in `skills/`. Copy any skill folder into your project's `.claude/skills/` to enable it.
+CF Browser ships with 6 ready-made [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills) in `skills/`. Copy any skill folder into your project's `.claude/skills/` to enable it.
 
 | Skill | Command | What it does |
 |-------|---------|--------------|
@@ -304,6 +304,8 @@ CF Browser ships with 4 ready-made [Claude Code Skills](https://docs.anthropic.c
 | **site-auditor** | `/site-auditor` | Crawl a site and generate SEO/links/accessibility audit report |
 | **doc-fetcher** | `/doc-fetcher` | Fetch an entire documentation site as local markdown for RAG |
 | **visual-qa** | `/visual-qa` | Multi-viewport screenshots (mobile/tablet/laptop/desktop) with visual review |
+| **changelog-monitor** | `/changelog-monitor` | Track releases and breaking changes from any project's web page |
+| **competitor-watch** | `/competitor-watch` | Extract and compare pricing/features across competitor websites |
 
 ### Install a skill
 
@@ -331,6 +333,12 @@ Restart Claude Code — skills available as slash commands.
 
 "QA check our site on mobile, tablet, and desktop"
 → /visual-qa → 4 viewport screenshots per page → visual review report
+
+"What's new in Claude Code?"
+→ /changelog-monitor → browser_json on GitHub releases → structured summary
+
+"Compare Vercel vs Netlify vs Cloudflare Pages pricing"
+→ /competitor-watch → extract each pricing page → normalized comparison table
 ```
 
 ## Security
@@ -384,7 +392,9 @@ cf-browser/
 │   ├── content-extractor/   Read & extract web content
 │   ├── site-auditor/        SEO & link health audit
 │   ├── doc-fetcher/         Fetch docs for RAG
-│   └── visual-qa/           Multi-viewport screenshot QA
+│   ├── visual-qa/           Multi-viewport screenshot QA
+│   ├── changelog-monitor/   Track releases & breaking changes
+│   └── competitor-watch/    Compare pricing & features
 ├── LICENSE                  MIT
 ├── README.md
 └── README.zh-TW.md

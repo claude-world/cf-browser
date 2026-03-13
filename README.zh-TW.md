@@ -1,6 +1,6 @@
 # CF Browser
 
-> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **9 個 MCP 工具 + 4 個即用 Skill**，支援 JavaScript 渲染的網頁。
+> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **9 個 MCP 工具 + 6 個即用 Skill**，支援 JavaScript 渲染的網頁。
 
 **[English README](README.md)**
 
@@ -296,7 +296,7 @@ async with CFBrowser(
 
 ## Skills（附贈）
 
-CF Browser 附帶 4 個即用的 [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills)，放在 `skills/` 目錄。將 skill 資料夾複製到你專案的 `.claude/skills/` 即可啟用。
+CF Browser 附帶 6 個即用的 [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills)，放在 `skills/` 目錄。將 skill 資料夾複製到你專案的 `.claude/skills/` 即可啟用。
 
 | Skill | 指令 | 功能 |
 |-------|------|------|
@@ -304,6 +304,8 @@ CF Browser 附帶 4 個即用的 [Claude Code Skills](https://docs.anthropic.com
 | **site-auditor** | `/site-auditor` | 爬取網站並產生 SEO / 連結 / 無障礙審計報告 |
 | **doc-fetcher** | `/doc-fetcher` | 將整個文件站抓取為本地 Markdown，供 RAG 使用 |
 | **visual-qa** | `/visual-qa` | 多裝置視窗截圖（手機/平板/筆電/桌機）+ 視覺檢查 |
+| **changelog-monitor** | `/changelog-monitor` | 追蹤任何專案的版本更新與破壞性變更 |
+| **competitor-watch** | `/competitor-watch` | 擷取並比較競爭對手的定價 / 功能 |
 
 ### 安裝 Skill
 
@@ -331,6 +333,12 @@ cp -r skills/* .claude/skills/
 
 「在手機、平板和桌機上 QA 檢查我們的網站」
 → /visual-qa → 每頁 4 種視窗截圖 → 視覺檢查報告
+
+「Claude Code 最近更新了什麼？」
+→ /changelog-monitor → 從 GitHub releases 擷取 → 結構化摘要
+
+「比較 Vercel、Netlify、Cloudflare Pages 的定價」
+→ /competitor-watch → 擷取各家定價頁 → 標準化比較表
 ```
 
 ## 安全性
@@ -384,7 +392,9 @@ cf-browser/
 │   ├── content-extractor/   網頁內容讀取與擷取
 │   ├── site-auditor/        SEO 與連結健康審計
 │   ├── doc-fetcher/         文件抓取供 RAG 使用
-│   └── visual-qa/           多裝置視窗截圖 QA
+│   ├── visual-qa/           多裝置視窗截圖 QA
+│   ├── changelog-monitor/   版本更新與破壞性變更追蹤
+│   └── competitor-watch/    競品定價與功能比較
 ├── LICENSE                  MIT
 ├── README.md
 └── README.zh-TW.md
