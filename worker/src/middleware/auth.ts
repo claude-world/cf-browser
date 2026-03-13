@@ -6,7 +6,8 @@ import type { AppEnv } from "../types.js";
  * Uses Web Crypto API (available in Workers) to hash both values and compare.
  */
 async function safeEqual(a: string, b: string): Promise<boolean> {
-  if (a.length !== b.length) return false;
+  // Always hash both inputs so the comparison is constant-time
+  // regardless of input length (both digests are 32 bytes).
   const encoder = new TextEncoder();
   const [hashA, hashB] = await Promise.all([
     crypto.subtle.digest("SHA-256", encoder.encode(a)),

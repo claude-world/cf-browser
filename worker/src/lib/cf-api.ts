@@ -117,4 +117,7 @@ export class CfBrowserApi {
   async getCrawlStatus(jobId: string): Promise<CfApiResponse<unknown>> {
     return this.request<unknown>("GET", `/crawl/${jobId}`);
   }
+
+  // a11y reuses the /snapshot endpoint but the route handler
+  // strips binary data and reshapes the output for LLM consumption.
 }

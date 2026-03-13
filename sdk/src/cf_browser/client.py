@@ -215,6 +215,21 @@ class CFBrowser:
         payload = _build_payload(url, no_cache, opts)
         return await self._post_json("/links", payload)
 
+    async def a11y(self, url: str, *, no_cache: bool = False, **opts: Any) -> dict:
+        """Get the accessibility tree of *url*.
+
+        Returns a structured representation of the page's accessibility
+        information — the same data assistive technologies use. Lower
+        token cost than HTML for LLM consumption.
+
+        Returns
+        -------
+        dict
+            Accessibility tree data.
+        """
+        payload = _build_payload(url, no_cache, opts)
+        return await self._post_json("/a11y", payload)
+
     async def crawl(self, url: str, *, no_cache: bool = False, **opts: Any) -> str:
         """Start an asynchronous crawl of *url*.
 
@@ -226,7 +241,13 @@ class CFBrowser:
         """
         payload = _build_payload(url, no_cache, opts)
         data = await self._post_json("/crawl", payload)
-        return data["job_id"]
+        job_id = data.get("job_id") if isinstance(data, dict) else None
+        if not job_id:
+            raise CFBrowserError(
+                "Crawl response missing job_id",
+                status_code=None,
+            )
+        return job_id
 
     async def crawl_status(self, job_id: str) -> dict:
         """Poll the status of a crawl job.

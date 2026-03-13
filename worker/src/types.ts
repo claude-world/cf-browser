@@ -13,10 +13,23 @@ export type Variables = {
 
 export type AppEnv = { Bindings: Env; Variables: Variables };
 
+// Optional cookies for authenticated browsing
+export type CookieParam = {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+};
+
 // Base request body all POST routes accept
 export type BaseRequestBody = {
   url: string;
   no_cache?: boolean;
+  cookies?: CookieParam[];       // inject cookies before page load
+  headers?: Record<string, string>; // custom HTTP headers
 };
 
 // Endpoint-specific option types
@@ -73,6 +86,11 @@ export type LinksRequestBody = BaseRequestBody & {
 export type CrawlRequestBody = BaseRequestBody & {
   limit?: number;       // max pages to crawl (CF API param)
   max_pages?: number;   // alias for limit (user-friendly)
+  timeout?: number;
+};
+
+export type A11yRequestBody = BaseRequestBody & {
+  wait_for?: string;
   timeout?: number;
 };
 

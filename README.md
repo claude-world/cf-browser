@@ -1,125 +1,51 @@
 # CF Browser
 
-[![GitHub Stars](https://img.shields.io/github/stars/claude-world/cf-browser)](https://github.com/claude-world/cf-browser/stargazers)
-[![License](https://img.shields.io/github/license/claude-world/cf-browser)](https://github.com/claude-world/cf-browser/blob/main/LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](sdk/pyproject.toml)
+The fastest way to read any website from [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-> Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools + 6 ready-made Skills** for JavaScript-rendered web pages.
+Open-source proxy that gives Claude Code 10 MCP tools for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility trees, AI-powered data extraction, and multi-page crawling. All powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier.
 
-**[繁體中文版 README](README.zh-TW.md)**
+[![PyPI - cf-browser](https://img.shields.io/pypi/v/cf-browser?label=cf-browser)](https://pypi.org/project/cf-browser/)
+[![PyPI - cf-browser-mcp](https://img.shields.io/pypi/v/cf-browser-mcp?label=cf-browser-mcp)](https://pypi.org/project/cf-browser-mcp/)
+[![Tests](https://github.com/claude-world/cf-browser/actions/workflows/test.yml/badge.svg)](https://github.com/claude-world/cf-browser/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Claude Code's built-in `WebFetch` only returns raw HTML — single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser wraps [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) behind a Worker proxy with auth, caching, and rate limiting, then exposes everything as MCP tools.
+## Why CF Browser?
 
-## Why cf-browser?
+Claude Code's built-in `WebFetch` only returns raw HTML. Single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser solves this:
 
-| Feature | WebFetch | cf-browser |
-|---------|----------|------------|
-| JS rendering | ❌ | ✅ |
-| Screenshots | ❌ | ✅ |
-| PDF generation | ❌ | ✅ |
-| Multi-page crawl | ❌ | ✅ |
-| Cookie/auth support | ❌ | ✅ |
-| JSON extraction | ❌ | ✅ |
+- **JS execution** — full headless Chrome renders the page before extraction
+- **10 purpose-built tools** — markdown, screenshots, PDFs, a11y trees, AI extraction, crawling
+- **Authenticated scraping** — inject cookies and custom headers for logged-in pages
+- **Zero cost** — runs entirely on Cloudflare's free tier
+- **Edge-based** — global low latency from 300+ Cloudflare locations
 
-## Architecture
+## Quick Start
 
-```
-Claude Code
-  └── MCP Server (9 tools)
-         │ HTTP + Bearer token
-         ▼
-  Cloudflare Worker (Edge)
-  ├── Auth middleware (API key, timing-safe)
-  ├── Rate limiting (KV, 60 req/min)
-  └── Cache (KV for text, R2 for binary)
-         │
-         ▼
-  CF Browser Rendering API (headless Chrome)
-```
-
-| Package | Language | Purpose |
-|---------|----------|---------|
-| `worker/` | TypeScript (Hono) | Edge proxy with auth, cache, rate limiting |
-| `sdk/` | Python (httpx) | Async client library |
-| `mcp-server/` | Python (FastMCP) | 9 MCP tools for Claude Code |
-
-## MCP Tools
-
-| Tool | Input | Output | Use case |
-|------|-------|--------|----------|
-| `browser_markdown` | url | Markdown | Read any web page as clean text |
-| `browser_content` | url | HTML | Get fully rendered HTML (JS executed) |
-| `browser_screenshot` | url, width, height | PNG file | Visual verification, multi-device testing |
-| `browser_pdf` | url, format | PDF file | Generate reports, archive pages |
-| `browser_scrape` | url, selectors[] | JSON | Extract specific elements by CSS selector |
-| `browser_json` | url, prompt | JSON | AI-powered structured data extraction |
-| `browser_links` | url | JSON array | Discover all hyperlinks on a page |
-| `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
-| `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
-
-### What you can ask Claude Code
-
-```
-"Read the React 19 migration guide"
-→ browser_markdown("https://react.dev/blog/2024/12/05/react-19")
-
-"Show me what our homepage looks like on mobile"
-→ browser_screenshot("https://example.com", width=375, height=667)
-
-"Extract the top 5 products with name, price, and rating"
-→ browser_json("https://example.com/products", prompt="Extract top 5 products...")
-
-"Find all broken links on our site"
-→ browser_crawl("https://example.com", limit=50) + browser_crawl_status(job_id, wait=True)
-```
-
-## Setup
-
-### Option A: Connect to an existing Worker (2 minutes)
-
-If someone has already deployed the Worker (e.g. a teammate), you only need the URL and API key:
+### Option A: One-Command Setup
 
 ```bash
-# Install into a dedicated venv
-python3 -m venv ~/.cf-browser-venv
-~/.cf-browser-venv/bin/pip install \
-  "cf-browser @ git+https://github.com/claude-world/cf-browser.git#subdirectory=sdk" \
-  "cf-browser-mcp @ git+https://github.com/claude-world/cf-browser.git#subdirectory=mcp-server"
+git clone https://github.com/claude-world/cf-browser.git
+cd cf-browser
+bash setup.sh
 ```
 
-Add to your project's `.mcp.json`:
+The setup script creates all Cloudflare resources, deploys the Worker, installs Python packages, and outputs a ready-to-paste `.mcp.json` config.
 
-```json
-{
-  "mcpServers": {
-    "cf-browser": {
-      "type": "stdio",
-      "command": "~/.cf-browser-venv/bin/python",
-      "args": ["-m", "cf_browser_mcp.server"],
-      "env": {
-        "CF_BROWSER_URL": "https://cf-browser.<subdomain>.workers.dev",
-        "CF_BROWSER_API_KEY": "<your-api-key>"
-      }
-    }
-  }
-}
-```
+### Option B: Step-by-Step
 
-Restart Claude Code — 9 `browser_*` tools ready.
-
-### Option B: Deploy your own Worker (5 minutes)
+<details>
+<summary>Click to expand manual setup</summary>
 
 #### Prerequisites
 
 - Node.js 18+, Python 3.10+
 - Cloudflare account with [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) enabled
-- `wrangler` CLI (`npm i -g wrangler && wrangler login`)
+- `wrangler` CLI authenticated (`npm i -g wrangler && wrangler login`)
 
 #### Step 1: Deploy the Worker
 
 ```bash
-git clone https://github.com/claude-world/cf-browser.git
-cd cf-browser/worker
+cd worker
 cp wrangler.toml.example wrangler.toml
 npm install
 ```
@@ -135,14 +61,8 @@ wrangler r2 bucket create cf-browser-storage
 Set secrets:
 
 ```bash
-# Account ID (shown by: wrangler whoami)
-wrangler secret put CF_ACCOUNT_ID
-
-# API token — create at https://dash.cloudflare.com/profile/api-tokens
-# Required permission: Account → Workers Browser Rendering → Edit
-wrangler secret put CF_API_TOKEN
-
-# Generate a client API key (save this — you'll need it for .mcp.json)
+wrangler secret put CF_ACCOUNT_ID      # from: wrangler whoami
+wrangler secret put CF_API_TOKEN       # from: https://dash.cloudflare.com/profile/api-tokens
 echo "$(openssl rand -hex 32)" | wrangler secret put API_KEYS
 ```
 
@@ -153,21 +73,20 @@ wrangler deploy
 # → https://cf-browser.<your-subdomain>.workers.dev
 ```
 
-Verify:
-
-```bash
-curl https://cf-browser.<your-subdomain>.workers.dev/health
-# {"status":"ok","version":"1.0.0"}
-```
-
 #### Step 2: Install SDK + MCP Server
 
 ```bash
-cd ../sdk && pip install -e .
+pip install cf-browser cf-browser-mcp
+```
+
+Or install from source:
+
+```bash
+cd sdk && pip install -e .
 cd ../mcp-server && pip install -e .
 ```
 
-#### Step 3: Register MCP
+#### Step 3: Register MCP in Claude Code
 
 Add to your project's `.mcp.json`:
 
@@ -180,14 +99,79 @@ Add to your project's `.mcp.json`:
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_BROWSER_URL": "https://cf-browser.<your-subdomain>.workers.dev",
-        "CF_BROWSER_API_KEY": "<the-api-key-you-generated>"
+        "CF_BROWSER_API_KEY": "<your-api-key>"
       }
     }
   }
 }
 ```
 
-Restart Claude Code — 9 `browser_*` tools available.
+Restart Claude Code. You'll see 10 `browser_*` tools available.
+
+</details>
+
+## Architecture
+
+```
+Claude Code
+  └── MCP Server (10 tools)
+         │ HTTP + Bearer token
+         ▼
+  Cloudflare Worker
+  ├── Auth middleware (API key, timing-safe)
+  ├── Rate limiting (KV, 60 req/min)
+  └── Cache (KV for text, R2 for binary)
+         │
+         ▼
+  CF Browser Rendering API (headless Chrome)
+```
+
+Three independent packages:
+
+| Package | Language | Purpose |
+|---------|----------|---------|
+| `worker/` | TypeScript (Hono) | Edge proxy with auth, cache, rate limiting |
+| `sdk/` (`cf-browser` on PyPI) | Python (httpx) | Async client library |
+| `mcp-server/` (`cf-browser-mcp` on PyPI) | Python (FastMCP) | 10 MCP tools for Claude Code |
+
+## MCP Tools
+
+| Tool | Input | Output | Use case |
+|------|-------|--------|----------|
+| `browser_markdown` | url | Markdown string | Read any web page as clean text |
+| `browser_content` | url | HTML string | Get fully rendered HTML (JS executed) |
+| `browser_screenshot` | url, width, height | PNG file path | Visual verification, multi-device testing |
+| `browser_pdf` | url, format | PDF file path | Generate reports, archive pages |
+| `browser_scrape` | url, selectors[] | JSON | Extract specific elements by CSS selector |
+| `browser_json` | url, prompt | JSON | AI-powered structured data extraction |
+| `browser_links` | url | JSON array | Discover all hyperlinks on a page |
+| `browser_a11y` | url | JSON | Accessibility tree — LLM-friendly structured data |
+| `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
+| `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
+
+All tools accept optional `cookies` and `headers` parameters for authenticated scraping.
+
+### Examples in Claude Code
+
+```
+"Read the React 19 migration guide"
+→ browser_markdown("https://react.dev/blog/2024/12/05/react-19")
+
+"Show me what our homepage looks like on mobile"
+→ browser_screenshot("https://example.com", width=375, height=667)
+
+"Extract the top 5 products with name, price, and rating"
+→ browser_json("https://example.com/products", prompt="Extract top 5 products...")
+
+"Get the page structure for accessibility analysis"
+→ browser_a11y("https://example.com")
+
+"Scrape our dashboard (requires login)"
+→ browser_markdown("https://app.example.com/dashboard", cookies='[{"name":"session","value":"abc"}]')
+
+"Find all broken links on our site"
+→ browser_crawl("https://example.com", limit=50) → browser_crawl_status(job_id, wait=True)
+```
 
 ## Worker API Reference
 
@@ -198,16 +182,32 @@ All routes (except `/health`) require `Authorization: Bearer <api-key>` header.
 | Route | Method | Body | Cache | Response |
 |-------|--------|------|-------|----------|
 | `/health` | GET | — | — | `{"status":"ok"}` |
-| `/content` | POST | `{url, wait_for?, no_cache?}` | KV 1hr | HTML |
-| `/markdown` | POST | `{url, wait_for?, no_cache?}` | KV 1hr | Markdown |
-| `/screenshot` | POST | `{url, width?, height?, full_page?, no_cache?}` | R2 24hr | PNG |
-| `/pdf` | POST | `{url, format?, landscape?, no_cache?}` | R2 24hr | PDF |
-| `/snapshot` | POST | `{url, wait_for?, no_cache?}` | KV 30min | JSON |
-| `/scrape` | POST | `{url, elements[], wait_for?, no_cache?}` | KV 30min | JSON |
-| `/json` | POST | `{url, prompt, schema?, no_cache?}` | None | JSON |
-| `/links` | POST | `{url, wait_for?, no_cache?}` | KV 1hr | JSON |
+| `/content` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 1hr | HTML |
+| `/markdown` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 1hr | Markdown |
+| `/screenshot` | POST | `{url, width?, height?, full_page?, cookies?, headers?, no_cache?}` | R2 24hr | PNG |
+| `/pdf` | POST | `{url, format?, landscape?, cookies?, headers?, no_cache?}` | R2 24hr | PDF |
+| `/snapshot` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
+| `/scrape` | POST | `{url, elements[], wait_for?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
+| `/json` | POST | `{url, prompt, schema?, cookies?, headers?, no_cache?}` | None | JSON |
+| `/links` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 1hr | JSON |
+| `/a11y` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 5min | JSON |
 | `/crawl` | POST | `{url, limit?, no_cache?}` | — | `{"job_id":"..."}` |
 | `/crawl/:id` | GET | — | R2 | JSON |
+
+### Authenticated requests
+
+All endpoints accept optional `cookies` and `headers` fields for accessing authenticated pages:
+
+```bash
+curl -X POST https://cf-browser.example.workers.dev/markdown \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://app.example.com/dashboard",
+    "cookies": [{"name": "session_id", "value": "abc123", "domain": ".example.com"}],
+    "headers": {"X-Custom-Auth": "token"}
+  }'
+```
 
 ### Request examples
 
@@ -218,42 +218,32 @@ curl -X POST https://cf-browser.example.workers.dev/markdown \
   -H "Content-Type: application/json" \
   -d '{"url": "https://react.dev"}'
 
-# Screenshot with custom viewport
+# Screenshot with viewport
 curl -X POST https://cf-browser.example.workers.dev/screenshot \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com", "width": 1280, "height": 720}' \
   -o screenshot.png
 
-# AI-powered structured extraction
+# Accessibility tree
+curl -X POST https://cf-browser.example.workers.dev/a11y \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+
+# AI extraction
 curl -X POST https://cf-browser.example.workers.dev/json \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://news.ycombinator.com", "prompt": "Extract top 5 stories with title and score"}'
-
-# Scrape specific elements
-curl -X POST https://cf-browser.example.workers.dev/scrape \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "elements": ["h1", ".price", "#main"]}'
-
-# Start async crawl
-curl -X POST https://cf-browser.example.workers.dev/crawl \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "limit": 10}'
-
-# Poll crawl status
-curl https://cf-browser.example.workers.dev/crawl/JOB_ID \
-  -H "Authorization: Bearer YOUR_KEY"
 ```
 
 ### Cache behavior
 
 - Set `"no_cache": true` in the request body to bypass cache
 - Cached responses include `X-Cache: HIT` header
-- Text content (HTML, Markdown, JSON) → KV storage
-- Binary content (PNG, PDF) → R2 storage
+- Text content (HTML, Markdown, JSON) is stored in KV
+- Binary content (PNG, PDF) is stored in R2
 - Completed crawl results are persisted to R2
 
 ### Rate limiting
@@ -263,6 +253,10 @@ curl https://cf-browser.example.workers.dev/crawl/JOB_ID \
 - Exceeded: HTTP 429 with `Retry-After` header
 
 ## Python SDK
+
+```bash
+pip install cf-browser
+```
 
 ```python
 from cf_browser import CFBrowser
@@ -283,8 +277,17 @@ async with CFBrowser(
         prompt="Extract the top 5 stories with title and score",
     )
 
+    # Accessibility tree (LLM-friendly, lower token cost)
+    tree = await browser.a11y("https://example.com")
+
     # Scrape by CSS selectors
     elements = await browser.scrape("https://example.com", selectors=["h1", ".price"])
+
+    # Authenticated scraping with cookies
+    md = await browser.markdown(
+        "https://app.example.com/dashboard",
+        cookies=[{"name": "session", "value": "abc", "domain": ".example.com"}],
+    )
 
     # Async crawl
     job_id = await browser.crawl("https://example.com", limit=10)
@@ -303,65 +306,20 @@ async with CFBrowser(
 | `scrape(url, selectors, **opts)` | `dict` | Elements by selector |
 | `json_extract(url, prompt, **opts)` | `dict` | AI-extracted data |
 | `links(url, **opts)` | `list[dict]` | All hyperlinks |
+| `a11y(url, **opts)` | `dict` | Accessibility tree |
 | `crawl(url, **opts)` | `str` | Job ID |
 | `crawl_status(job_id)` | `dict` | Job status |
 | `crawl_wait(job_id, timeout, poll_interval)` | `dict` | Wait for completion |
 
-All methods accept `no_cache=True` to bypass caching.
-
-## Skills (Bonus)
-
-CF Browser ships with 6 ready-made [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills) in `skills/`. Copy any skill folder into your project's `.claude/skills/` to enable it.
-
-| Skill | Command | What it does |
-|-------|---------|--------------|
-| **content-extractor** | `/content-extractor` | Read pages, extract structured data, scrape elements, discover links |
-| **site-auditor** | `/site-auditor` | Crawl a site and generate SEO/links/accessibility audit report |
-| **doc-fetcher** | `/doc-fetcher` | Fetch an entire documentation site as local markdown for RAG |
-| **visual-qa** | `/visual-qa` | Multi-viewport screenshots (mobile/tablet/laptop/desktop) with visual review |
-| **changelog-monitor** | `/changelog-monitor` | Track releases and breaking changes from any project's web page |
-| **competitor-watch** | `/competitor-watch` | Extract and compare pricing/features across competitor websites |
-
-### Install a skill
-
-```bash
-# Copy one skill
-cp -r skills/content-extractor .claude/skills/
-
-# Or copy all
-cp -r skills/* .claude/skills/
-```
-
-Restart Claude Code — skills available as slash commands.
-
-### Example workflows
-
-```
-"Read the Hono docs and summarize the routing section"
-→ /content-extractor → browser_markdown → clean summary
-
-"Audit claude-world.com for SEO issues"
-→ /site-auditor → crawl 50 pages → scrape meta tags → markdown report
-
-"Download the Astro docs for offline reference"
-→ /doc-fetcher → discover 20 pages → browser_markdown each → save as docs/
-
-"QA check our site on mobile, tablet, and desktop"
-→ /visual-qa → 4 viewport screenshots per page → visual review report
-
-"What's new in Claude Code?"
-→ /changelog-monitor → browser_json on GitHub releases → structured summary
-
-"Compare Vercel vs Netlify vs Cloudflare Pages pricing"
-→ /competitor-watch → extract each pricing page → normalized comparison table
-```
+All methods accept `no_cache=True` to bypass caching, and `cookies`/`headers` for authenticated access.
 
 ## Security
 
-- **Auth**: Timing-safe Bearer token comparison using SHA-256
-- **Rate limiting**: Per-key tracking with hashed key material in KV
+- **Auth**: Timing-safe Bearer token comparison using SHA-256 (prevents timing attacks)
+- **Rate limiting**: Per-key tracking with hashed key material in KV (no raw keys stored)
 - **SSRF prevention**: Only `http://` and `https://` URLs allowed
 - **Secrets**: All credentials stored via `wrangler secret put`, never in code
+- **Cookie isolation**: Cookies are injected per-request, never persisted
 
 ## Cost
 
@@ -372,47 +330,84 @@ Restart Claude Code — skills available as slash commands.
 | R2 | 10GB storage | 10GB included |
 | Workers | 100K requests/day | 10M requests/mo |
 
+For most Claude Code usage, the free tier is sufficient.
+
 ## Development
 
+### Worker
+
 ```bash
-# Worker
-cd worker && npm install && npm test
+cd worker
+npm install
+npm run dev          # Local dev server at :8787
+npm run type-check   # TypeScript checks
+npm test             # Run tests
+```
 
-# SDK (28 tests)
-cd sdk && pip install -e ".[dev]" && pytest tests/ -v
+### SDK
 
-# MCP Server
-cd mcp-server && pip install -e ../sdk && pip install -e ".[dev]"
+```bash
+cd sdk
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+### MCP Server
+
+```bash
+cd mcp-server
+python -m venv .venv && source .venv/bin/activate
+pip install -e ../sdk     # Install SDK first
+pip install -e ".[dev]"
 ```
 
 ## Project Structure
 
 ```
 cf-browser/
-├── worker/                  Cloudflare Worker (TypeScript/Hono)
+├── worker/                  Cloudflare Worker (TypeScript)
 │   ├── src/
-│   │   ├── index.ts         App entry point
+│   │   ├── index.ts         Hono app entry point
 │   │   ├── types.ts         Env bindings & request types
-│   │   ├── middleware/      auth, cache, rate-limit
-│   │   ├── routes/          9 endpoint handlers
-│   │   └── lib/             CF API client, cache keys, URL validation
+│   │   ├── middleware/
+│   │   │   ├── auth.ts      Bearer token validation
+│   │   │   ├── cache.ts     KV/R2 cache layer
+│   │   │   └── rate-limit.ts  Per-key rate limiting
+│   │   ├── routes/
+│   │   │   ├── content.ts   POST /content → HTML
+│   │   │   ├── markdown.ts  POST /markdown → Markdown
+│   │   │   ├── screenshot.ts POST /screenshot → PNG
+│   │   │   ├── pdf.ts       POST /pdf → PDF
+│   │   │   ├── snapshot.ts  POST /snapshot → JSON
+│   │   │   ├── scrape.ts    POST /scrape → JSON
+│   │   │   ├── json.ts      POST /json → JSON (AI)
+│   │   │   ├── links.ts     POST /links → JSON
+│   │   │   ├── a11y.ts      POST /a11y → JSON (accessibility tree)
+│   │   │   └── crawl.ts     POST/GET /crawl
+│   │   └── lib/
+│   │       ├── cf-api.ts    CF Browser Rendering client
+│   │       ├── cache-key.ts SHA-256 cache keys
+│   │       └── validate-url.ts  SSRF prevention
 │   ├── tests/
-│   └── wrangler.toml.example
-├── sdk/                     Python SDK (httpx + Pydantic)
-│   ├── src/cf_browser/      client, models, exceptions
-│   └── tests/test_client.py
-├── mcp-server/              MCP Server (FastMCP)
-│   └── src/cf_browser_mcp/server.py
-├── skills/                  Claude Code Skills (copy to .claude/skills/)
-│   ├── content-extractor/   Read & extract web content
-│   ├── site-auditor/        SEO & link health audit
-│   ├── doc-fetcher/         Fetch docs for RAG
-│   ├── visual-qa/           Multi-viewport screenshot QA
-│   ├── changelog-monitor/   Track releases & breaking changes
-│   └── competitor-watch/    Compare pricing & features
-├── LICENSE                  MIT
-├── README.md
-└── README.zh-TW.md
+│   ├── wrangler.toml.example
+│   └── package.json
+├── sdk/                     Python SDK (cf-browser on PyPI)
+│   ├── src/cf_browser/
+│   │   ├── client.py        Async CFBrowser client
+│   │   ├── models.py        Pydantic response models
+│   │   └── exceptions.py    Typed error hierarchy
+│   ├── tests/
+│   └── pyproject.toml
+├── mcp-server/              MCP Server (cf-browser-mcp on PyPI)
+│   ├── src/cf_browser_mcp/
+│   │   └── server.py        10 MCP tool definitions
+│   └── pyproject.toml
+├── examples/                Usage examples
+├── setup.sh                 One-command setup script
+├── CHANGELOG.md
+├── LICENSE
+└── README.md
 ```
 
 ## Contributing
@@ -420,7 +415,7 @@ cf-browser/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
-4. Run `npm test` (worker) and `pytest` (SDK)
+4. Run `npm test` (worker) and `pytest` (SDK) to verify
 5. Submit a pull request
 
 ## License

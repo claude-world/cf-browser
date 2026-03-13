@@ -1,14 +1,14 @@
-"""MCP Server wrapping the CF Browser Python SDK as 9 tools."""
+"""MCP Server wrapping the CF Browser Python SDK as 10 tools."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
@@ -50,21 +50,49 @@ def _timestamp() -> str:
     return str(int(time.time()))
 
 
+def _auth_kwargs(
+    cookies: str = "",
+    headers: str = "",
+) -> dict[str, Any]:
+    """Parse optional cookies/headers JSON strings into SDK kwargs."""
+    kwargs: dict[str, Any] = {}
+    if cookies:
+        try:
+            kwargs["cookies"] = json.loads(cookies)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid cookies JSON: {e}") from e
+    if headers:
+        try:
+            kwargs["headers"] = json.loads(headers)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid headers JSON: {e}") from e
+    return kwargs
+
+
 # ---------------------------------------------------------------------------
 # Tool 1: browser_content
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool(description="Fetch rendered HTML content of a web page (JavaScript executed)")
-async def browser_content(url: str, wait_for: str = "") -> str:
+async def browser_content(
+    url: str,
+    wait_for: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Return the fully-rendered HTML of *url*.
 
     Args:
         url: The page URL to fetch.
         wait_for: Optional CSS selector to wait for before capturing.
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+                 Example: [{"name":"session","value":"abc","domain":".example.com"}]
+        headers: Optional JSON object of custom HTTP headers.
+                 Example: {"X-Auth":"token123"}
     """
     client = get_client()
-    kwargs: dict = {}
+    kwargs = _auth_kwargs(cookies, headers)
     if wait_for:
         kwargs["wait_for"] = wait_for
     return await client.content(url, **kwargs)
@@ -81,6 +109,8 @@ async def browser_screenshot(
     width: int = 1280,
     height: int = 720,
     full_page: bool = False,
+    cookies: str = "",
+    headers: str = "",
 ) -> str:
     """Capture a PNG screenshot of *url* and return the local file path.
 
@@ -89,10 +119,13 @@ async def browser_screenshot(
         width: Viewport width in pixels (default 1280).
         height: Viewport height in pixels (default 720).
         full_page: When True, capture the full scrollable page.
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
+    auth = _auth_kwargs(cookies, headers)
     data: bytes = await client.screenshot(
-        url, width=width, height=height, full_page=full_page
+        url, width=width, height=height, full_page=full_page, **auth
     )
 
     out_dir = Path(tempfile.gettempdir()) / "cf-browser-screenshots"
@@ -111,15 +144,23 @@ async def browser_screenshot(
 
 
 @mcp.tool(description="Generate PDF of a web page")
-async def browser_pdf(url: str, format: str = "A4") -> str:
+async def browser_pdf(
+    url: str,
+    format: str = "A4",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Render *url* as a PDF and return the local file path.
 
     Args:
         url: The page URL to render.
         format: Paper format – A4 | Letter | A3 | A5 | Legal | Tabloid (default A4).
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    data: bytes = await client.pdf(url, format=format)
+    auth = _auth_kwargs(cookies, headers)
+    data: bytes = await client.pdf(url, format=format, **auth)
 
     out_dir = Path(tempfile.gettempdir()) / "cf-browser-pdfs"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -137,14 +178,21 @@ async def browser_pdf(url: str, format: str = "A4") -> str:
 
 
 @mcp.tool(description="Convert web page to clean Markdown (best for reading content)")
-async def browser_markdown(url: str) -> str:
+async def browser_markdown(
+    url: str,
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Return the Markdown representation of *url*.
 
     Args:
         url: The page URL to convert.
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    return await client.markdown(url)
+    auth = _auth_kwargs(cookies, headers)
+    return await client.markdown(url, **auth)
 
 
 # ---------------------------------------------------------------------------
@@ -153,15 +201,23 @@ async def browser_markdown(url: str) -> str:
 
 
 @mcp.tool(description="Scrape specific elements from a web page using CSS selectors")
-async def browser_scrape(url: str, selectors: list[str]) -> str:
+async def browser_scrape(
+    url: str,
+    selectors: list[str],
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Extract DOM elements matching each CSS selector and return as JSON.
 
     Args:
         url: The page URL to scrape.
         selectors: List of CSS selectors to extract (e.g. ["h1", ".price", "#main"]).
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    result = await client.scrape(url, selectors)
+    auth = _auth_kwargs(cookies, headers)
+    result = await client.scrape(url, selectors, **auth)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -176,16 +232,24 @@ async def browser_scrape(url: str, selectors: list[str]) -> str:
         "(provide a prompt describing what to extract)"
     )
 )
-async def browser_json(url: str, prompt: str) -> str:
+async def browser_json(
+    url: str,
+    prompt: str,
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Use AI to extract structured data from *url* and return as JSON.
 
     Args:
         url: The page URL to analyse.
         prompt: Natural-language description of the data to extract
                 (e.g. "extract product name, price, and availability").
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    result = await client.json_extract(url, prompt)
+    auth = _auth_kwargs(cookies, headers)
+    result = await client.json_extract(url, prompt, **auth)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -195,14 +259,21 @@ async def browser_json(url: str, prompt: str) -> str:
 
 
 @mcp.tool(description="Extract all links from a web page")
-async def browser_links(url: str) -> str:
+async def browser_links(
+    url: str,
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Return all hyperlinks found on *url* as a JSON array of {href, text} objects.
 
     Args:
         url: The page URL to inspect.
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    result = await client.links(url)
+    auth = _auth_kwargs(cookies, headers)
+    result = await client.links(url, **auth)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -252,36 +323,61 @@ async def browser_crawl_status(
         result = await client.crawl_status(job_id)
         return json.dumps(result, ensure_ascii=False)
 
-    # Blocking poll loop
-    poll_interval = 2
-    deadline = time.monotonic() + timeout
-
-    while True:
-        result = await client.crawl_status(job_id)
-        status_value = (
-            result.get("status") if isinstance(result, dict) else None
+    # Delegate to SDK's crawl_wait which handles polling and error states
+    try:
+        result = await client.crawl_wait(
+            job_id,
+            timeout=float(timeout),
+            poll_interval=2.0,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    except TimeoutError:
+        return json.dumps(
+            {"job_id": job_id, "status": "running", "_timeout": True},
+            ensure_ascii=False,
         )
 
-        if status_value in ("complete", "completed", "failed", "error"):
-            return json.dumps(result, ensure_ascii=False)
 
-        if time.monotonic() >= deadline:
-            result_with_timeout = dict(result) if isinstance(result, dict) else {"raw": result}
-            result_with_timeout["_timeout"] = True
-            return json.dumps(result_with_timeout, ensure_ascii=False)
+# ---------------------------------------------------------------------------
+# Tool 10: browser_a11y
+# ---------------------------------------------------------------------------
 
-        await asyncio.sleep(poll_interval)
+
+@mcp.tool(
+    description=(
+        "Get the accessibility tree of a web page — structured data for LLM "
+        "consumption with lower token cost than HTML"
+    )
+)
+async def browser_a11y(
+    url: str,
+    wait_for: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
+    """Return the accessibility tree of *url* as JSON.
+
+    The accessibility tree contains the same structured data that screen
+    readers and assistive technologies use: headings, landmarks, links,
+    buttons, form elements, and text content.
+
+    Args:
+        url: The page URL to inspect.
+        wait_for: Optional CSS selector to wait for before capturing.
+        cookies: Optional JSON array of cookie objects for authenticated pages.
+        headers: Optional JSON object of custom HTTP headers.
+    """
+    client = get_client()
+    kwargs = _auth_kwargs(cookies, headers)
+    if wait_for:
+        kwargs["wait_for"] = wait_for
+    result = await client.a11y(url, **kwargs)
+    return json.dumps(result, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-
-def main() -> None:
-    """Run the MCP server over stdio for Claude Code and other MCP clients."""
-    mcp.run(transport="stdio")
-
-
 if __name__ == "__main__":
-    main()
+    mcp.run(transport="stdio")

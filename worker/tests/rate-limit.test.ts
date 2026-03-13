@@ -57,10 +57,18 @@ describe("rateLimitMiddleware", () => {
 
   it("blocks the 61st request in the same minute bucket", async () => {
     const kv = makeKvStub();
-    // Pre-seed counter at 60 (the limit)
+    // Pre-seed counter at 60 (the limit).
+    // The middleware hashes the API key the same way as hashKey() in rate-limit.ts:
+    // SHA-256 of the key, first 8 bytes as hex.
+    const apiKey = "test-key-1234";
+    const keyData = new TextEncoder().encode(apiKey);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", keyData);
+    const keyHash = Array.from(new Uint8Array(hashBuffer).slice(0, 8))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
     const minuteBucket = Math.floor(Date.now() / 60_000);
     await (kv as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      `rl:test-key:${minuteBucket}`,
+      `rl:${keyHash}:${minuteBucket}`,
       "60"
     );
 

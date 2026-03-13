@@ -4,12 +4,15 @@ __pycache__/
 dist/
 .venv/
 *.pyc
+.pymon
+.pytest_cache/
 
 # Node
 node_modules/
 
 # Cloudflare
 .wrangler/
+.dev.vars
 
 # IDE
 .vscode/

@@ -4,25 +4,34 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cf-browser"
-version = "0.1.0"
-description = "Python SDK for CF Browser Rendering service"
+version = "1.0.0"
+description = "Python SDK for Cloudflare Browser Rendering — read any web page from Python"
 readme = "README.md"
-authors = [
-    { name = "Claude World" },
-]
 license = "MIT"
-license-files = ["LICENSE"]
 requires-python = ">=3.10"
-keywords = ["cloudflare", "browser-rendering", "headless-chrome", "web-scraping", "mcp"]
+authors = [
+    { name = "Claude World", email = "hello@claude-world.com" },
+]
+keywords = [
+    "cloudflare",
+    "browser-rendering",
+    "headless-chrome",
+    "web-scraping",
+    "mcp",
+    "claude-code",
+    "browser-automation",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -32,8 +41,10 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/claude-world/cf-browser"
+Documentation = "https://github.com/claude-world/cf-browser#readme"
 Repository = "https://github.com/claude-world/cf-browser"
-"Bug Tracker" = "https://github.com/claude-world/cf-browser/issues"
+Issues = "https://github.com/claude-world/cf-browser/issues"
+Changelog = "https://github.com/claude-world/cf-browser/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "respx"]

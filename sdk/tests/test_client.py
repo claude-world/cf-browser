@@ -203,8 +203,91 @@ async def test_links_returns_list(client):
 
 
 # ---------------------------------------------------------------------------
+# a11y()
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a11y_returns_dict(client):
+    payload = {"url": "https://example.com", "title": "Example", "nodes": []}
+    with respx.mock:
+        respx.post(f"{BASE_URL}/a11y").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        result = await client.a11y("https://example.com")
+    assert isinstance(result, dict)
+    assert result["title"] == "Example"
+
+
+@pytest.mark.asyncio
+async def test_a11y_sends_wait_for(client):
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/a11y").mock(
+            return_value=httpx.Response(200, json={"title": "Test"})
+        )
+        await client.a11y("https://example.com", wait_for="main")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["wait_for"] == "main"
+
+
+# ---------------------------------------------------------------------------
+# Cookies and headers support
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cookies_forwarded_in_body(client):
+    cookies = [{"name": "session", "value": "abc", "domain": ".example.com"}]
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content("https://example.com", cookies=cookies)
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["cookies"] == cookies
+
+
+@pytest.mark.asyncio
+async def test_custom_headers_forwarded_in_body(client):
+    custom_headers = {"X-Auth": "token123", "Accept-Language": "en"}
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/markdown").mock(
+            return_value=httpx.Response(200, text="# Hello")
+        )
+        await client.markdown("https://example.com", headers=custom_headers)
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["headers"] == custom_headers
+
+
+@pytest.mark.asyncio
+async def test_cookies_and_headers_together(client):
+    cookies = [{"name": "sid", "value": "xyz"}]
+    custom_headers = {"X-Token": "abc"}
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/screenshot").mock(
+            return_value=httpx.Response(200, content=b"\x89PNG")
+        )
+        await client.screenshot(
+            "https://example.com",
+            cookies=cookies,
+            headers=custom_headers,
+        )
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["cookies"] == cookies
+    assert sent["headers"] == custom_headers
+
+
+# ---------------------------------------------------------------------------
 # crawl() and crawl_status()
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_crawl_raises_on_missing_job_id(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/crawl").mock(
+            return_value=httpx.Response(200, json={"status": "ok"})
+        )
+        with pytest.raises(CFBrowserError, match="missing job_id"):
+            await client.crawl("https://example.com")
+
 
 @pytest.mark.asyncio
 async def test_crawl_returns_job_id(client):

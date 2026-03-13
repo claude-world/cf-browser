@@ -1,0 +1,101 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to publish'
+        required: true
+        type: choice
+        options:
+          - both
+          - sdk
+          - mcp-server
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Test SDK
+        working-directory: sdk
+        run: |
+          pip install -e ".[dev]"
+          pytest tests/ -v
+
+      - name: Test Worker
+        working-directory: worker
+        run: |
+          npm install
+          npm test
+
+  publish-sdk:
+    needs: test
+    if: >
+      github.event_name == 'release' ||
+      github.event.inputs.package == 'both' ||
+      github.event.inputs.package == 'sdk'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build SDK
+        working-directory: sdk
+        run: python -m build
+
+      - name: Publish SDK to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/dist/
+
+  publish-mcp-server:
+    needs: [test, publish-sdk]
+    # Run if tests passed and SDK succeeded or was skipped (mcp-server-only publish)
+    if: >
+      always() &&
+      needs.test.result == 'success' &&
+      (needs.publish-sdk.result == 'success' || needs.publish-sdk.result == 'skipped') &&
+      (github.event_name == 'release' ||
+       github.event.inputs.package == 'both' ||
+       github.event.inputs.package == 'mcp-server')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build MCP Server
+        working-directory: mcp-server
+        run: python -m build
+
+      - name: Publish MCP Server to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: mcp-server/dist/

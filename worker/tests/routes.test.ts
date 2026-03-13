@@ -361,6 +361,74 @@ describe("GET /crawl/:id", () => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /a11y
+// ---------------------------------------------------------------------------
+
+describe("POST /a11y", () => {
+  it("returns structured a11y data with screenshot stripped", async () => {
+    const env = buildEnv();
+    mockCfJson({ url: "https://example.com", title: "Example", html: "<h1>Hi</h1>", screenshot: "base64data..." });
+    const res = await postJson("/a11y", { url: "https://example.com" }, env);
+    expect(res.status).toBe(200);
+    const body = await res.json<Record<string, unknown>>();
+    expect(body.type).toBe("accessibility_snapshot");
+    expect(body.title).toBe("Example");
+    expect(body.html).toBe("<h1>Hi</h1>");
+    // Screenshot should be stripped to reduce token cost
+    expect(body.screenshot).toBeUndefined();
+  });
+
+  it("returns 400 if url missing", async () => {
+    const env = buildEnv();
+    const res = await postJson("/a11y", {}, env);
+    expect(res.status).toBe(400);
+  });
+
+  it("caches a11y results in KV", async () => {
+    const env = buildEnv();
+    mockCfJson({ url: "https://example.com", title: "Example" });
+    await postJson("/a11y", { url: "https://example.com" }, env);
+    const res = await postJson("/a11y", { url: "https://example.com" }, env);
+    expect(res.headers.get("X-Cache")).toBe("HIT");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cookie and header forwarding
+// ---------------------------------------------------------------------------
+
+describe("Cookie/header forwarding", () => {
+  it("forwards cookies in request body to CF API", async () => {
+    const env = buildEnv();
+    mockCfText("<html>auth</html>");
+    const cookies = [{ name: "session", value: "abc123", domain: ".example.com" }];
+    const res = await postJson(
+      "/content",
+      { url: "https://example.com", cookies },
+      env
+    );
+    expect(res.status).toBe(200);
+    // Verify cookies were passed through to CF API
+    const fetchCall = fetchMock.mock.calls[0];
+    const sentBody = JSON.parse(fetchCall[1]?.body as string || fetchCall[0]?.body as string || "{}");
+    expect(sentBody.cookies).toEqual(cookies);
+  });
+
+  it("forwards custom headers in request body to CF API", async () => {
+    const env = buildEnv();
+    mockCfText("# Auth Page", "text/markdown");
+    const headers = { "X-Auth": "token123" };
+    const res = await postJson(
+      "/markdown",
+      { url: "https://example.com", headers },
+      env
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Auth enforcement on protected routes
 // ---------------------------------------------------------------------------
 

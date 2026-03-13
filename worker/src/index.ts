@@ -12,6 +12,7 @@ import scrapeRoute from "./routes/scrape.js";
 import jsonRoute from "./routes/json.js";
 import linksRoute from "./routes/links.js";
 import crawlRoute from "./routes/crawl.js";
+import a11yRoute from "./routes/a11y.js";
 
 const app = new Hono<AppEnv>();
 
@@ -50,6 +51,7 @@ app.use("/scrape/*", authMiddleware, rateLimitMiddleware);
 app.use("/json/*", authMiddleware, rateLimitMiddleware);
 app.use("/links/*", authMiddleware, rateLimitMiddleware);
 app.use("/crawl/*", authMiddleware, rateLimitMiddleware);
+app.use("/a11y/*", authMiddleware, rateLimitMiddleware);
 
 // ---------------------------------------------------------------------------
 // Route handlers
@@ -64,6 +66,7 @@ app.route("/scrape", scrapeRoute);
 app.route("/json", jsonRoute);
 app.route("/links", linksRoute);
 app.route("/crawl", crawlRoute);
+app.route("/a11y", a11yRoute);
 
 // ---------------------------------------------------------------------------
 // 404 fallback

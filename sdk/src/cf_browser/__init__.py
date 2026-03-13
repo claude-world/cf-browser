@@ -18,8 +18,6 @@ Example
     asyncio.run(main())
 """
 
-__version__ = "0.1.0"
-
 from .client import CFBrowser
 from .exceptions import (
     AuthenticationError,
@@ -35,7 +33,6 @@ from .models import (
 )
 
 __all__ = [
-    "__version__",
     # Client
     "CFBrowser",
     # Exceptions
