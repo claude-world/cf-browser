@@ -277,5 +277,11 @@ async def browser_crawl_status(
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Run the MCP server over stdio for Claude Code and other MCP clients."""
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

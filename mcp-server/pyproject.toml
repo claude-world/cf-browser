@@ -6,18 +6,36 @@ build-backend = "hatchling.build"
 name = "cf-browser-mcp"
 version = "0.1.0"
 description = "MCP Server exposing CF Browser Rendering as 9 tools for Claude Code"
+readme = "README.md"
+authors = [
+    { name = "Claude World" },
+]
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 keywords = ["mcp", "cloudflare", "browser-rendering", "claude-code"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "cf-browser",
+    "cf-browser>=0.1.0",
     "mcp[cli]>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/claude-world/cf-browser"
+Repository = "https://github.com/claude-world/cf-browser"
+"Bug Tracker" = "https://github.com/claude-world/cf-browser/issues"
+
+[project.scripts]
+cf-browser-mcp = "cf_browser_mcp.server:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]
