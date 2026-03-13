@@ -1,10 +1,25 @@
 # CF Browser
 
+[![GitHub Stars](https://img.shields.io/github/stars/claude-world/cf-browser)](https://github.com/claude-world/cf-browser/stargazers)
+[![License](https://img.shields.io/github/license/claude-world/cf-browser)](https://github.com/claude-world/cf-browser/blob/main/LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](sdk/pyproject.toml)
+
 > Open-source proxy service that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) **9 MCP tools + 6 ready-made Skills** for JavaScript-rendered web pages.
 
 **[繁體中文版 README](README.zh-TW.md)**
 
 Claude Code's built-in `WebFetch` only returns raw HTML — single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser wraps [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) behind a Worker proxy with auth, caching, and rate limiting, then exposes everything as MCP tools.
+
+## Why cf-browser?
+
+| Feature | WebFetch | cf-browser |
+|---------|----------|------------|
+| JS rendering | ❌ | ✅ |
+| Screenshots | ❌ | ✅ |
+| PDF generation | ❌ | ✅ |
+| Multi-page crawl | ❌ | ✅ |
+| Cookie/auth support | ❌ | ✅ |
+| JSON extraction | ❌ | ✅ |
 
 ## Architecture
 
