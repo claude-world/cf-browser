@@ -389,7 +389,7 @@ All methods accept `no_cache=True` to bypass caching, and `cookies`/`headers` fo
 
 - **Auth**: Timing-safe Bearer token comparison using SHA-256 (prevents timing attacks)
 - **Rate limiting**: Per-key tracking with hashed key material in KV (no raw keys stored)
-- **SSRF prevention**: Only `http://` and `https://` URLs allowed
+- **SSRF prevention**: Only `http://` and `https://` URLs allowed; localhost and private IP ranges blocked
 - **Secrets**: All credentials stored via `wrangler secret put`, never in code
 - **Cookie isolation**: Cookies are injected per-request, never persisted
 
@@ -466,7 +466,9 @@ cf-browser/
 │   └── package.json
 ├── sdk/                     Python SDK (cf-browser on PyPI)
 │   ├── src/cf_browser/
-│   │   ├── client.py        Async CFBrowser client
+│   │   ├── client.py        CFBrowser client (Worker mode)
+│   │   ├── direct.py        CFBrowserDirect client (Direct mode)
+│   │   ├── _shared.py       Shared helpers (crawl polling)
 │   │   ├── models.py        Pydantic response models
 │   │   └── exceptions.py    Typed error hierarchy
 │   ├── tests/

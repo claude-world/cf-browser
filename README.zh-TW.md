@@ -449,7 +449,12 @@ cf-browser/
 │   ├── tests/
 │   └── wrangler.toml.example
 ├── sdk/                     Python SDK（httpx + Pydantic）
-│   ├── src/cf_browser/      客戶端（Worker + Direct 模式）、模型、例外
+│   ├── src/cf_browser/
+│   │   ├── client.py        CFBrowser 客戶端（Worker 模式）
+│   │   ├── direct.py        CFBrowserDirect 客戶端（直連模式）
+│   │   ├── _shared.py       共用工具（爬取輪詢）
+│   │   ├── models.py        Pydantic 回應模型
+│   │   └── exceptions.py    型別化例外階層
 │   └── tests/               test_client.py + test_direct.py
 ├── mcp-server/              MCP Server（FastMCP）
 │   └── src/cf_browser_mcp/server.py

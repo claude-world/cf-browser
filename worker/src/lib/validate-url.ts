@@ -23,9 +23,9 @@ export function validateUrl(url: string): { valid: true } | { valid: false; erro
       return { valid: false, error: "URL targets a blocked host" };
     }
 
-    // Block private IP ranges (10.x, 172.16-31.x, 192.168.x, 169.254.x)
+    // Block private IP ranges (0.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x)
     const ip = parsed.hostname;
-    if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/.test(ip)) {
+    if (/^(0\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/.test(ip)) {
       return { valid: false, error: "URL targets a private IP address" };
     }
 

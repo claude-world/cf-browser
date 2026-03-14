@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import atexit
+import asyncio
 import json
 import os
 import re
@@ -63,20 +65,12 @@ def get_client():
     return _client
 
 
-import atexit
-
-
 def _cleanup_client():
     """Close the browser client on process exit."""
     global _client
     if _client is not None:
-        import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(_client.close())
-            else:
-                loop.run_until_complete(_client.close())
+            asyncio.run(_client.close())
         except Exception:
             pass
 
