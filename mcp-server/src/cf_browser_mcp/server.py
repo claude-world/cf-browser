@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from cf_browser.exceptions import CFBrowserError
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("cf-browser")
@@ -37,6 +38,8 @@ def get_client():
     if _client is None:
         account_id = os.environ.get("CF_ACCOUNT_ID")
         api_token = os.environ.get("CF_API_TOKEN")
+        worker_url = os.environ.get("CF_BROWSER_URL")
+        worker_key = os.environ.get("CF_BROWSER_API_KEY")
 
         if account_id and api_token:
             from cf_browser import CFBrowserDirect
@@ -45,14 +48,40 @@ def get_client():
                 account_id=account_id,
                 api_token=api_token,
             )
-        else:
+        elif worker_url and worker_key:
             from cf_browser import CFBrowser
 
             _client = CFBrowser(
-                base_url=os.environ["CF_BROWSER_URL"],
-                api_key=os.environ["CF_BROWSER_API_KEY"],
+                base_url=worker_url,
+                api_key=worker_key,
+            )
+        else:
+            raise RuntimeError(
+                "CF Browser: set either (CF_ACCOUNT_ID + CF_API_TOKEN) for Direct mode "
+                "or (CF_BROWSER_URL + CF_BROWSER_API_KEY) for Worker mode."
             )
     return _client
+
+
+import atexit
+
+
+def _cleanup_client():
+    """Close the browser client on process exit."""
+    global _client
+    if _client is not None:
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_client.close())
+            else:
+                loop.run_until_complete(_client.close())
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_client)
 
 
 def _domain_from_url(url: str) -> str:
@@ -167,6 +196,7 @@ async def browser_screenshot(
 async def browser_pdf(
     url: str,
     format: str = "A4",
+    landscape: bool = False,
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -175,12 +205,16 @@ async def browser_pdf(
     Args:
         url: The page URL to render.
         format: Paper format – A4 | Letter | A3 | A5 | Legal | Tabloid (default A4).
+        landscape: When True, render in landscape orientation (default False).
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
     auth = _auth_kwargs(cookies, headers)
-    data: bytes = await client.pdf(url, format=format, **auth)
+    kwargs = auth
+    if landscape:
+        kwargs["landscape"] = True
+    data: bytes = await client.pdf(url, format=format, **kwargs)
 
     out_dir = Path(tempfile.gettempdir()) / "cf-browser-pdfs"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -354,6 +388,11 @@ async def browser_crawl_status(
     except TimeoutError:
         return json.dumps(
             {"job_id": job_id, "status": "running", "_timeout": True},
+            ensure_ascii=False,
+        )
+    except CFBrowserError as e:
+        return json.dumps(
+            {"job_id": job_id, "status": "failed", "error": str(e)},
             ensure_ascii=False,
         )
 

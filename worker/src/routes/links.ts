@@ -32,7 +32,8 @@ app.post("/", async (c) => {
     const cached = await getCached(c, cacheKey, "kv");
     if (cached.hit) {
       c.header("X-Cache", "HIT");
-      return c.json(JSON.parse(cached.data as string));
+      c.header("Content-Type", "application/json");
+      return c.body(cached.data as string);
     }
   }
 

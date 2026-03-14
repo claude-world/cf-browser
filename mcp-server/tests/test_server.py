@@ -1,4 +1,9 @@
-"""Smoke tests for the MCP server — verify tools are registered correctly."""
+"""Smoke tests for the MCP server — verify tools are registered correctly.
+
+Note: These tests access FastMCP internals (_tool_manager._tools) which
+may break on FastMCP version upgrades. If tests fail after an MCP library
+update, check for changes to the internal registry API.
+"""
 
 from cf_browser_mcp.server import mcp
 

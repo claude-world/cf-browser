@@ -1,5 +1,13 @@
 """
 Pydantic models for the CF Browser SDK.
+
+These models are provided as convenience types for users who want
+structured access to API responses. SDK methods return raw dicts/lists
+for flexibility — use these models to parse responses when type safety
+is desired::
+
+    from cf_browser.models import CrawlResult
+    result = CrawlResult(**await browser.crawl_status("job-id"))
 """
 from __future__ import annotations
 

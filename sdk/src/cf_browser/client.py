@@ -10,8 +10,6 @@ Example usage::
 """
 from __future__ import annotations
 
-import asyncio
-import time
 from typing import Any
 
 import httpx
@@ -294,32 +292,10 @@ class CFBrowser:
         CFBrowserError
             If the job reaches ``status == "failed"``.
         """
-        deadline = time.monotonic() + timeout
-
-        while True:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"Crawl job {job_id!r} did not complete within {timeout}s"
-                )
-
-            status_data = await self.crawl_status(job_id)
-            status = status_data.get("status", "")
-
-            if status in ("complete", "completed"):
-                return status_data
-            if status in ("failed", "error"):
-                error_msg = status_data.get("error", "unknown error")
-                raise CFBrowserError(
-                    f"Crawl job failed: {error_msg}",
-                    status_code=None,
-                )
-
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(
-                    f"Crawl job {job_id!r} did not complete within {timeout}s"
-                )
-            await asyncio.sleep(min(poll_interval, remaining))
+        from ._shared import crawl_wait_poll
+        return await crawl_wait_poll(
+            job_id, self.crawl_status, timeout=timeout, poll_interval=poll_interval
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

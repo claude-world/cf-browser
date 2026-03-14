@@ -44,7 +44,10 @@ Issues = "https://github.com/claude-world/cf-browser/issues"
 Changelog = "https://github.com/claude-world/cf-browser/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cf_browser_mcp"]

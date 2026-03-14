@@ -35,7 +35,8 @@ export async function rateLimitMiddleware(
   // apiKey is set by authMiddleware
   const apiKey: string = (c.get("apiKey") as string | undefined) ?? "anonymous";
   const keyHash = await hashKey(apiKey);
-  const minuteBucket = Math.floor(Date.now() / 60_000);
+  const now = Date.now();
+  const minuteBucket = Math.floor(now / 60_000);
   const kvKey = `rl:${keyHash}:${minuteBucket}`;
 
   // Read current count
@@ -44,7 +45,7 @@ export async function rateLimitMiddleware(
 
   if (count >= REQUESTS_PER_MINUTE) {
     // Tell client how many seconds until the bucket resets
-    const secondsUntilReset = 60 - (Math.floor(Date.now() / 1_000) % 60);
+    const secondsUntilReset = 60 - (Math.floor(now / 1_000) % 60);
     c.header("Retry-After", String(secondsUntilReset));
     c.header("X-RateLimit-Limit", String(REQUESTS_PER_MINUTE));
     c.header("X-RateLimit-Remaining", "0");

@@ -32,8 +32,10 @@ app.post("/", async (c) => {
     const cached = await getCached(c, cacheKey, "kv");
     if (cached.hit) {
       c.header("X-Cache", "HIT");
-      // Stored as JSON string — parse and re-emit
-      return c.json(JSON.parse(cached.data as string));
+      // Cached data does not include screenshot (stripped before storage to
+      // stay under the KV 25 MB value limit). Return as-is without re-parsing.
+      c.header("Content-Type", "application/json");
+      return c.body(cached.data as string);
     }
   }
 
@@ -45,17 +47,20 @@ app.post("/", async (c) => {
     return c.json({ error: result.message, status: result.status }, result.status as 502);
   }
 
+  // Cache without screenshot to avoid KV 25MB limit
+  const { screenshot: _screenshot, ...cacheable } = result.data as Record<string, unknown>;
   if (!noCache) {
     await setCached(
       c,
       cacheKey,
-      JSON.stringify(result.data),
+      JSON.stringify(cacheable),
       "application/json",
       TTL,
       "kv"
     );
   }
 
+  // Return full response including screenshot
   c.header("X-Cache", "MISS");
   return c.json(result.data);
 });

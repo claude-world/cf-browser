@@ -51,7 +51,7 @@ export async function authMiddleware(
   for (const k of validKeys) {
     if (await safeEqual(k, token)) {
       isValid = true;
-      break;
+      // do NOT break — must compare all keys to avoid positional timing leak
     }
   }
 

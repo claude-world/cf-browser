@@ -20,6 +20,10 @@ const app = new Hono<AppEnv>();
 // Global middleware
 // ---------------------------------------------------------------------------
 
+// CORS: wildcard origin is intentional for this API-style Worker.
+// All endpoints require Bearer token auth, so unauthenticated cross-origin
+// requests are rejected regardless. Teams needing tighter CORS should
+// replace "*" with their specific origin domain.
 app.use(
   "*",
   cors({
