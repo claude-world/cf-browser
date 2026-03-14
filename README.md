@@ -2,7 +2,7 @@
 
 The fastest way to read any website from [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Open-source proxy that gives Claude Code 10 MCP tools for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility trees, AI-powered data extraction, and multi-page crawling. All powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier.
+Open-source tool that gives Claude Code **10 MCP tools + 6 ready-to-use Skills** for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility trees, AI-powered data extraction, and multi-page crawling. Powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier. Supports **Direct Mode** (no Worker needed) and **Worker Mode** (with caching & rate limiting).
 
 [![PyPI - cf-browser](https://img.shields.io/pypi/v/cf-browser?label=cf-browser)](https://pypi.org/project/cf-browser/)
 [![PyPI - cf-browser-mcp](https://img.shields.io/pypi/v/cf-browser-mcp?label=cf-browser-mcp)](https://pypi.org/project/cf-browser-mcp/)
@@ -392,6 +392,27 @@ All methods accept `no_cache=True` to bypass caching, and `cookies`/`headers` fo
 - **SSRF prevention**: Only `http://` and `https://` URLs allowed; localhost and private IP ranges blocked
 - **Secrets**: All credentials stored via `wrangler secret put`, never in code
 - **Cookie isolation**: Cookies are injected per-request, never persisted
+
+## Skills (Bonus)
+
+CF Browser includes 6 ready-to-use [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills) in the `skills/` directory. Copy a skill folder to your project's `.claude/skills/` to activate.
+
+| Skill | Command | What it does |
+|-------|---------|--------------|
+| **content-extractor** | `/content-extractor` | Read pages, extract structured data, scrape elements, discover links |
+| **site-auditor** | `/site-auditor` | Crawl a site and generate SEO / link / accessibility audit report |
+| **doc-fetcher** | `/doc-fetcher` | Crawl an entire docs site to local Markdown for RAG |
+| **visual-qa** | `/visual-qa` | Multi-device viewport screenshots (mobile/tablet/laptop/desktop) + visual checks |
+| **changelog-monitor** | `/changelog-monitor` | Track version updates and breaking changes for any project |
+| **competitor-watch** | `/competitor-watch` | Extract and compare competitor pricing / features |
+
+```bash
+# Copy a single skill
+cp -r skills/content-extractor .claude/skills/
+
+# Or copy all
+cp -r skills/* .claude/skills/
+```
 
 ## Cost
 

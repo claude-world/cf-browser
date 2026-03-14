@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-14
+
+### Added
+
+- **Direct Mode** — call CF Browser Rendering API directly without deploying a Worker. New `CFBrowserDirect` class in SDK with same API as `CFBrowser`. MCP Server auto-detects mode from env vars: `CF_ACCOUNT_ID` + `CF_API_TOKEN` for Direct, `CF_BROWSER_URL` + `CF_BROWSER_API_KEY` for Worker
+- **`landscape` parameter** for `browser_pdf` MCP tool
+
+### Changed
+
+- SDK `crawl_wait` polling logic extracted to shared `_shared.py` module (DRY between Worker and Direct clients)
+- MCP Server `get_client()` now raises descriptive `RuntimeError` when neither credential pair is configured
+- MCP Server adds `atexit` cleanup to close the HTTP client on process exit
+
+### Fixed
+
+- **Worker PDF endpoint** — strip `format`/`landscape` params that CF REST API does not accept (was returning 400)
+- **Worker auth timing leak** — removed `break` in multi-key loop to prevent positional timing side-channel
+- **Worker snapshot cache** — strip base64 screenshot before KV storage to avoid 25MB value limit
+- **Worker SSRF** — block localhost, `0.0.0.0/8`, and RFC 1918 private IP ranges in URL validation
+- **Worker rate limiter** — capture `Date.now()` once to prevent TOCTOU race at minute boundaries
+- **Worker cache hit** — avoid redundant `JSON.parse` + `JSON.stringify` round-trip on cached JSON responses (snapshot, scrape, links, a11y routes)
+- **MCP `browser_crawl_status`** — catch `CFBrowserError` from failed crawl jobs instead of surfacing raw exception
+- **CORS** — documented `origin: "*"` as intentional design choice for API-style Worker
+
+### Security
+
+- Added `wrangler.local.toml` to root `.gitignore` to prevent KV namespace ID leaks
+
 ## [1.0.0] - 2026-03-14
 
 ### Added
