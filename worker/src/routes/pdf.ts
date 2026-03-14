@@ -38,15 +38,9 @@ app.post("/", async (c) => {
   }
 
   const api = new CfBrowserApi(c.env.CF_ACCOUNT_ID, c.env.CF_API_TOKEN);
-  const { no_cache: _skip, format, landscape, ...cfBody } = body;
-
-  // Map user-friendly params → CF API's pdfOptions
-  if (format || landscape) {
-    cfBody.pdfOptions = {
-      ...(format ? { format: format as string } : {}),
-      ...(landscape ? { landscape: true } : {}),
-    };
-  }
+  // Strip format/landscape — CF Browser Rendering REST API /pdf endpoint
+  // does not accept these options (unlike the Puppeteer Workers Binding API).
+  const { no_cache: _skip, format: _fmt, landscape: _ls, ...cfBody } = body;
 
   const result = await api.pdf(cfBody);
 

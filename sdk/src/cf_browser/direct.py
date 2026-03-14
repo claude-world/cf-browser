@@ -83,18 +83,16 @@ def _transform_screenshot_opts(opts: dict[str, Any]) -> dict[str, Any]:
 
 
 def _transform_pdf_opts(opts: dict[str, Any]) -> dict[str, Any]:
-    """Map user-friendly PDF params to CF API format."""
-    out = dict(opts)
-    fmt = out.pop("format", None)
-    landscape = out.pop("landscape", None)
+    """Strip PDF-specific params not supported by the CF REST API.
 
-    if fmt or landscape:
-        pdf_options: dict[str, Any] = {}
-        if fmt:
-            pdf_options["format"] = fmt
-        if landscape:
-            pdf_options["landscape"] = True
-        out["pdfOptions"] = pdf_options
+    The CF Browser Rendering REST API ``/pdf`` endpoint does not accept
+    ``format`` or ``landscape`` options (unlike the Puppeteer-based Workers
+    Binding API).  We strip them silently so callers can use the same kwargs
+    across Worker and Direct modes without errors.
+    """
+    out = dict(opts)
+    out.pop("format", None)
+    out.pop("landscape", None)
     return out
 
 
