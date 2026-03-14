@@ -21,7 +21,55 @@ Claude Code's built-in `WebFetch` only returns raw HTML. Single-page apps, dynam
 
 ## Quick Start
 
-### Option A: One-Command Setup
+Two ways to use CF Browser — pick the one that fits:
+
+| | Direct Mode | Worker Mode |
+|---|---|---|
+| **Setup** | `pip install` + 2 env vars | Deploy Worker + `pip install` |
+| **Time to start** | 2 minutes | 10 minutes |
+| **Requirements** | CF Account ID + API Token | Worker + KV + R2 |
+| **Caching** | None | KV + R2 (saves ~70% API quota) |
+| **Rate limiting** | None | 60 req/min per key |
+| **Multi-user** | No (shares your CF credentials) | Yes (each user gets own API key) |
+| **Best for** | Personal use, quick start | Teams, production, high volume |
+
+### Option A: Direct Mode (No Worker)
+
+Calls Cloudflare Browser Rendering API directly — no Worker deployment needed.
+
+```bash
+pip install cf-browser cf-browser-mcp
+```
+
+Add to your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cf-browser": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "cf_browser_mcp.server"],
+      "env": {
+        "CF_ACCOUNT_ID": "<your-account-id>",
+        "CF_API_TOKEN": "<your-api-token>"
+      }
+    }
+  }
+}
+```
+
+Get your credentials:
+- **Account ID**: `wrangler whoami` or [Cloudflare Dashboard](https://dash.cloudflare.com) → any domain → Overview → right sidebar
+- **API Token**: [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) → Create Token → use "Edit Cloudflare Workers" template
+
+Restart Claude Code. Done.
+
+### Option B: Worker Mode (with caching & rate limiting)
+
+Deploy a Cloudflare Worker as an edge proxy with built-in caching and auth.
+
+**One-Command Setup:**
 
 ```bash
 git clone https://github.com/claude-world/cf-browser.git
@@ -31,10 +79,8 @@ bash setup.sh
 
 The setup script creates all Cloudflare resources, deploys the Worker, installs Python packages, and outputs a ready-to-paste `.mcp.json` config.
 
-### Option B: Step-by-Step
-
 <details>
-<summary>Click to expand manual setup</summary>
+<summary>Click to expand manual Worker setup</summary>
 
 #### Prerequisites
 
@@ -113,17 +159,33 @@ Restart Claude Code. You'll see 10 `browser_*` tools available.
 ## Architecture
 
 ```
-Claude Code
-  └── MCP Server (10 tools)
-         │ HTTP + Bearer token
-         ▼
-  Cloudflare Worker
-  ├── Auth middleware (API key, timing-safe)
-  ├── Rate limiting (KV, 60 req/min)
-  └── Cache (KV for text, R2 for binary)
-         │
-         ▼
-  CF Browser Rendering API (headless Chrome)
+                          ┌─────────────────────┐
+                          │     Claude Code      │
+                          └──────────┬───────────┘
+                                     │
+                          ┌──────────▼───────────┐
+                          │  MCP Server (10 tools)│
+                          └──────────┬───────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │                                  │
+            Direct Mode                        Worker Mode
+            (CF_ACCOUNT_ID                     (CF_BROWSER_URL
+             + CF_API_TOKEN)                    + CF_BROWSER_API_KEY)
+                    │                                  │
+                    │                    ┌─────────────▼──────────────┐
+                    │                    │   Cloudflare Worker        │
+                    │                    │  ├── Auth (timing-safe)    │
+                    │                    │  ├── Rate limit (KV)       │
+                    │                    │  └── Cache (KV + R2)       │
+                    │                    └─────────────┬──────────────┘
+                    │                                  │
+                    └────────────────┬─────────────────┘
+                                     │
+                          ┌──────────▼───────────┐
+                          │ CF Browser Rendering │
+                          │   API (Chrome)       │
+                          └──────────────────────┘
 ```
 
 Three independent packages:
@@ -259,6 +321,16 @@ pip install cf-browser
 ```
 
 ```python
+# Direct mode — no Worker needed
+from cf_browser import CFBrowserDirect
+
+async with CFBrowserDirect(
+    account_id="your-cf-account-id",
+    api_token="your-cf-api-token",
+) as browser:
+    md = await browser.markdown("https://example.com")
+
+# Worker mode — via deployed Worker
 from cf_browser import CFBrowser
 
 async with CFBrowser(

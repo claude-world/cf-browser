@@ -1,25 +1,41 @@
 # CF Browser
 
-> 開源代理服務，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **10 個 MCP 工具 + 6 個即用 Skill**，支援 JavaScript 渲染的網頁。
+> 開源工具，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **10 個 MCP 工具 + 6 個即用 Skill**，支援 JavaScript 渲染的網頁。
 
 **[English README](README.md)**
 
-Claude Code 內建的 `WebFetch` 只能取得原始 HTML — 單頁應用程式（SPA）、動態內容和 JS 渲染的頁面都會回傳空白。CF Browser 將 [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) 包裝在 Worker 代理後方，提供認證、快取和速率限制，並以 MCP 工具的形式對外開放。
+Claude Code 內建的 `WebFetch` 只能取得原始 HTML — 單頁應用程式（SPA）、動態內容和 JS 渲染的頁面都會回傳空白。CF Browser 透過 [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) 解決這個問題，支援兩種模式：**直連模式**（免部署）和 **Worker 模式**（含快取與限流）。
 
 ## 架構
 
 ```
-Claude Code
-  └── MCP Server（10 個工具）
-         │ HTTP + Bearer token
-         ▼
-  Cloudflare Worker（Edge）
-  ├── 認證中介層（API key，timing-safe）
-  ├── 速率限制（KV，60 req/min）
-  └── 快取（KV 文字 / R2 二進位）
-         │
-         ▼
-  CF Browser Rendering API（無頭 Chrome）
+                          ┌─────────────────────┐
+                          │     Claude Code      │
+                          └──────────┬───────────┘
+                                     │
+                          ┌──────────▼───────────┐
+                          │ MCP Server（10 個工具）│
+                          └──────────┬───────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │                                  │
+              直連模式                           Worker 模式
+            (CF_ACCOUNT_ID                     (CF_BROWSER_URL
+             + CF_API_TOKEN)                    + CF_BROWSER_API_KEY)
+                    │                                  │
+                    │                    ┌─────────────▼──────────────┐
+                    │                    │   Cloudflare Worker        │
+                    │                    │  ├── 認證（timing-safe）    │
+                    │                    │  ├── 速率限制（KV）         │
+                    │                    │  └── 快取（KV + R2）        │
+                    │                    └─────────────┬──────────────┘
+                    │                                  │
+                    └────────────────┬─────────────────┘
+                                     │
+                          ┌──────────▼───────────┐
+                          │ CF Browser Rendering │
+                          │   API（無頭 Chrome）  │
+                          └──────────────────────┘
 ```
 
 | 套件 | 語言 | 用途 |
@@ -60,16 +76,24 @@ Claude Code
 
 ## 安裝設定
 
-### 方案 A：連接已部署的 Worker（2 分鐘）
+兩種使用方式 — 選適合你的：
 
-如果已經有人部署了 Worker（例如團隊成員），你只需要 URL 和 API key：
+| | 直連模式 | Worker 模式 |
+|---|---|---|
+| **設定** | `pip install` + 2 個環境變數 | 部署 Worker + `pip install` |
+| **上手時間** | 2 分鐘 | 10 分鐘 |
+| **需要什麼** | CF Account ID + API Token | Worker + KV + R2 |
+| **快取** | 無 | KV + R2（省 ~70% API 配額） |
+| **速率限制** | 無 | 每 key 60 req/min |
+| **多用戶** | 否（共用你的 CF 憑證） | 是（每個用戶獨立 API key） |
+| **適合** | 個人使用、快速上手 | 團隊、生產環境、高流量 |
+
+### 方案 A：直連模式（免部署 Worker）
+
+直接呼叫 Cloudflare Browser Rendering API — 不需要部署任何東西。
 
 ```bash
-# 安裝到專用的虛擬環境
-python3 -m venv ~/.cf-browser-venv
-~/.cf-browser-venv/bin/pip install \
-  "cf-browser @ git+https://github.com/claude-world/cf-browser.git#subdirectory=sdk" \
-  "cf-browser-mcp @ git+https://github.com/claude-world/cf-browser.git#subdirectory=mcp-server"
+pip install cf-browser cf-browser-mcp
 ```
 
 在你專案的 `.mcp.json` 加入：
@@ -79,20 +103,37 @@ python3 -m venv ~/.cf-browser-venv
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "~/.cf-browser-venv/bin/python",
+      "command": "python",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
-        "CF_BROWSER_URL": "https://cf-browser.<subdomain>.workers.dev",
-        "CF_BROWSER_API_KEY": "<your-api-key>"
+        "CF_ACCOUNT_ID": "<你的帳號-ID>",
+        "CF_API_TOKEN": "<你的-API-Token>"
       }
     }
   }
 }
 ```
 
+取得憑證：
+- **Account ID**：`wrangler whoami` 或 [Cloudflare Dashboard](https://dash.cloudflare.com) → 任意域名 → 概覽 → 右側欄
+- **API Token**：[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) → 建立 Token → 使用「編輯 Cloudflare Workers」模板
+
 重啟 Claude Code — 10 個 `browser_*` 工具即可使用。
 
-### 方案 B：自行部署 Worker（5 分鐘）
+### 方案 B：Worker 模式（含快取與限流）
+
+部署 Worker 作為 Edge 代理。
+
+```bash
+git clone https://github.com/claude-world/cf-browser.git
+cd cf-browser
+bash setup.sh
+```
+
+<details>
+<summary>展開手動部署步驟</summary>
+
+### 方案 B（手動）：自行部署 Worker（5 分鐘）
 
 #### 前置需求
 
@@ -174,6 +215,8 @@ cd ../mcp-server && pip install -e .
 
 重啟 Claude Code — 10 個 `browser_*` 工具即可使用。
 
+</details>
+
 ## Worker API 參考
 
 所有路由（除了 `/health`）都需要 `Authorization: Bearer <api-key>` 標頭。
@@ -250,6 +293,16 @@ curl https://cf-browser.example.workers.dev/crawl/JOB_ID \
 ## Python SDK
 
 ```python
+# 直連模式 — 免部署 Worker
+from cf_browser import CFBrowserDirect
+
+async with CFBrowserDirect(
+    account_id="your-cf-account-id",
+    api_token="your-cf-api-token",
+) as browser:
+    md = await browser.markdown("https://example.com")
+
+# Worker 模式 — 透過已部署的 Worker
 from cf_browser import CFBrowser
 
 async with CFBrowser(

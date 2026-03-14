@@ -23,15 +23,35 @@ _client = None
 
 
 def get_client():
-    """Return a singleton CFBrowser client (lazy-initialized)."""
+    """Return a singleton browser client (lazy-initialized).
+
+    Supports two modes based on environment variables:
+
+    **Worker mode** (via deployed Cloudflare Worker):
+        CF_BROWSER_URL + CF_BROWSER_API_KEY
+
+    **Direct mode** (call CF API directly, no Worker needed):
+        CF_ACCOUNT_ID + CF_API_TOKEN
+    """
     global _client
     if _client is None:
-        from cf_browser import CFBrowser
+        account_id = os.environ.get("CF_ACCOUNT_ID")
+        api_token = os.environ.get("CF_API_TOKEN")
 
-        _client = CFBrowser(
-            base_url=os.environ["CF_BROWSER_URL"],
-            api_key=os.environ["CF_BROWSER_API_KEY"],
-        )
+        if account_id and api_token:
+            from cf_browser import CFBrowserDirect
+
+            _client = CFBrowserDirect(
+                account_id=account_id,
+                api_token=api_token,
+            )
+        else:
+            from cf_browser import CFBrowser
+
+            _client = CFBrowser(
+                base_url=os.environ["CF_BROWSER_URL"],
+                api_key=os.environ["CF_BROWSER_API_KEY"],
+            )
     return _client
 
 
