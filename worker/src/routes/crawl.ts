@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { CfBrowserApi } from "../lib/cf-api.js";
 import { validateUrl } from "../lib/validate-url.js";
+import { mapToCfParams } from "../lib/param-map.js";
 
 /**
  * Crawl routes:
@@ -39,7 +40,8 @@ app.post("/", async (c) => {
   if (max_pages && !cfBody.limit) {
     cfBody.limit = max_pages;
   }
-  const result = await api.crawl(cfBody);
+  const cfPayload = mapToCfParams(cfBody);
+  const result = await api.crawl(cfPayload);
 
   if (!result.ok) {
     return c.json({ error: result.message, status: result.status }, result.status as 502);

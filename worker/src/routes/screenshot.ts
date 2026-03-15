@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { CfBrowserApi } from "../lib/cf-api.js";
 import { validateUrl } from "../lib/validate-url.js";
+import { mapToCfParams } from "../lib/param-map.js";
 import { getCached, setCached, buildCacheKey } from "../middleware/cache.js";
 
 const TTL = 60 * 60 * 24; // 24 hours
@@ -51,7 +52,8 @@ app.post("/", async (c) => {
     cfBody.screenshotOptions = { fullPage: true };
   }
 
-  const result = await api.screenshot(cfBody);
+  const cfPayload = mapToCfParams(cfBody);
+  const result = await api.screenshot(cfPayload);
 
   if (!result.ok) {
     return c.json({ error: result.message, status: result.status }, result.status as 502);

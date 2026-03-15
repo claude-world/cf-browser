@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-15
+
+### Added
+
+- **`wait_until` parameter** — control navigation completion strategy (`networkidle0`, `networkidle2`, `load`, `domcontentloaded`). Critical for SPA sites like X/Twitter that need full JS hydration before content extraction
+- **`user_agent` parameter** — set custom User-Agent string per request across all 10 MCP tools
+- **`wait_for` now works correctly** — previously silently ignored by CF API due to wrong parameter name; now properly mapped to `waitForSelector` object format
+- **`headers` now works correctly** — previously silently ignored; now properly mapped to `setExtraHTTPHeaders`
+- **Shared `mapToCfParams()` utility** (Worker) — single-source parameter translation from user-friendly snake_case to CF API camelCase, used by all 10 route handlers
+- **Shared `_transform_common_opts()` function** (SDK Direct mode) — equivalent parameter mapping for Direct API calls
+- **`browser_crawl` now supports `cookies`/`headers`** — enables crawling authenticated sites
+
+### Fixed
+
+- **Critical: `wait_for` was silently broken** — CF REST API expects `waitForSelector: {selector: "..."}` (object), not `waitForSelector: "..."` (string) or `wait_for: "..."`. All prior versions sent the wrong format, causing the parameter to be silently ignored
+- **Critical: `headers` was silently broken** — CF REST API expects `setExtraHTTPHeaders`, not `headers`. Custom HTTP headers were never actually applied
+- **Critical: `timeout` was silently broken** — CF REST API expects `gotoOptions.timeout`, not top-level `timeout`. Request timeouts were never enforced
+- **Worker types consolidated** — moved `wait_for`, `timeout` from every endpoint-specific type into `BaseRequestBody` (DRY)
+- **MCP Server refactored** — replaced `_auth_kwargs()` with `_build_kwargs()` to handle all browser-control params in one place
+- **Existing test fixed** — `test_pdf_transforms_options` was asserting `pdfOptions` existence (incorrect), now correctly asserts `format`/`landscape` are stripped
+
+### Changed
+
+- Worker, SDK, and MCP Server versions synced to 1.2.0
+
 ## [1.1.0] - 2026-03-14
 
 ### Added

@@ -93,11 +93,20 @@ def _timestamp() -> str:
     return str(int(time.time()))
 
 
-def _auth_kwargs(
+def _build_kwargs(
     cookies: str = "",
     headers: str = "",
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
 ) -> dict[str, Any]:
-    """Parse optional cookies/headers JSON strings into SDK kwargs."""
+    """Parse tool params into SDK kwargs.
+
+    Handles JSON parsing for cookies/headers strings and passes through
+    browser-control params (wait_for, wait_until, user_agent) which the
+    SDK translates to CF API equivalents (waitForSelector,
+    gotoOptions.waitUntil, userAgent).
+    """
     kwargs: dict[str, Any] = {}
     if cookies:
         try:
@@ -109,6 +118,12 @@ def _auth_kwargs(
             kwargs["headers"] = json.loads(headers)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid headers JSON: {e}") from e
+    if wait_for:
+        kwargs["wait_for"] = wait_for
+    if wait_until:
+        kwargs["wait_until"] = wait_until
+    if user_agent:
+        kwargs["user_agent"] = user_agent
     return kwargs
 
 
@@ -121,6 +136,8 @@ def _auth_kwargs(
 async def browser_content(
     url: str,
     wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -129,15 +146,16 @@ async def browser_content(
     Args:
         url: The page URL to fetch.
         wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
                  Example: [{"name":"session","value":"abc","domain":".example.com"}]
         headers: Optional JSON object of custom HTTP headers.
                  Example: {"X-Auth":"token123"}
     """
     client = get_client()
-    kwargs = _auth_kwargs(cookies, headers)
-    if wait_for:
-        kwargs["wait_for"] = wait_for
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
     return await client.content(url, **kwargs)
 
 
@@ -152,6 +170,9 @@ async def browser_screenshot(
     width: int = 1280,
     height: int = 720,
     full_page: bool = False,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -162,13 +183,17 @@ async def browser_screenshot(
         width: Viewport width in pixels (default 1280).
         height: Viewport height in pixels (default 720).
         full_page: When True, capture the full scrollable page.
+        wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    auth = _auth_kwargs(cookies, headers)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
     data: bytes = await client.screenshot(
-        url, width=width, height=height, full_page=full_page, **auth
+        url, width=width, height=height, full_page=full_page, **kwargs
     )
 
     out_dir = Path(tempfile.gettempdir()) / "cf-browser-screenshots"
@@ -191,6 +216,9 @@ async def browser_pdf(
     url: str,
     format: str = "A4",
     landscape: bool = False,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -200,12 +228,15 @@ async def browser_pdf(
         url: The page URL to render.
         format: Paper format – A4 | Letter | A3 | A5 | Legal | Tabloid (default A4).
         landscape: When True, render in landscape orientation (default False).
+        wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    auth = _auth_kwargs(cookies, headers)
-    kwargs = auth
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
     if landscape:
         kwargs["landscape"] = True
     data: bytes = await client.pdf(url, format=format, **kwargs)
@@ -228,6 +259,9 @@ async def browser_pdf(
 @mcp.tool(description="Convert web page to clean Markdown (best for reading content)")
 async def browser_markdown(
     url: str,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -235,12 +269,16 @@ async def browser_markdown(
 
     Args:
         url: The page URL to convert.
+        wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    auth = _auth_kwargs(cookies, headers)
-    return await client.markdown(url, **auth)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    return await client.markdown(url, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +290,9 @@ async def browser_markdown(
 async def browser_scrape(
     url: str,
     selectors: list[str],
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -260,12 +301,16 @@ async def browser_scrape(
     Args:
         url: The page URL to scrape.
         selectors: List of CSS selectors to extract (e.g. ["h1", ".price", "#main"]).
+        wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    auth = _auth_kwargs(cookies, headers)
-    result = await client.scrape(url, selectors, **auth)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    result = await client.scrape(url, selectors, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -283,6 +328,9 @@ async def browser_scrape(
 async def browser_json(
     url: str,
     prompt: str,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -292,12 +340,16 @@ async def browser_json(
         url: The page URL to analyse.
         prompt: Natural-language description of the data to extract
                 (e.g. "extract product name, price, and availability").
+        wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    auth = _auth_kwargs(cookies, headers)
-    result = await client.json_extract(url, prompt, **auth)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    result = await client.json_extract(url, prompt, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -309,6 +361,9 @@ async def browser_json(
 @mcp.tool(description="Extract all links from a web page")
 async def browser_links(
     url: str,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -316,12 +371,16 @@ async def browser_links(
 
     Args:
         url: The page URL to inspect.
+        wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    auth = _auth_kwargs(cookies, headers)
-    result = await client.links(url, **auth)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    result = await client.links(url, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -335,15 +394,25 @@ async def browser_links(
         "Start crawling a website (async – use browser_crawl_status to check progress)"
     )
 )
-async def browser_crawl(url: str, limit: int = 10) -> str:
+async def browser_crawl(
+    url: str,
+    limit: int = 10,
+    user_agent: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
     """Kick off an async website crawl and return the job ID plus initial status.
 
     Args:
         url: Seed URL for the crawl.
         limit: Maximum number of pages to crawl (default 10).
+        user_agent: Custom User-Agent string for the browser.
+        cookies: Optional JSON array of cookie objects for authenticated crawling.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    job_id = await client.crawl(url, limit=limit)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, user_agent=user_agent)
+    job_id = await client.crawl(url, limit=limit, **kwargs)
     return json.dumps({"job_id": job_id, "status": "started"}, ensure_ascii=False)
 
 
@@ -405,6 +474,8 @@ async def browser_crawl_status(
 async def browser_a11y(
     url: str,
     wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
     cookies: str = "",
     headers: str = "",
 ) -> str:
@@ -417,13 +488,14 @@ async def browser_a11y(
     Args:
         url: The page URL to inspect.
         wait_for: Optional CSS selector to wait for before capturing.
+        wait_until: When to consider navigation done — "load" | "domcontentloaded"
+                    | "networkidle0" | "networkidle2" (default: "load").
+        user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    kwargs = _auth_kwargs(cookies, headers)
-    if wait_for:
-        kwargs["wait_for"] = wait_for
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
     result = await client.a11y(url, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 

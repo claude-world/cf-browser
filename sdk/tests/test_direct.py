@@ -154,14 +154,14 @@ async def test_pdf_returns_bytes(client):
 
 
 @pytest.mark.asyncio
-async def test_pdf_transforms_options(client):
+async def test_pdf_strips_unsupported_options(client):
+    """CF REST API /pdf does not accept format/landscape — they must be stripped."""
     with respx.mock:
         route = respx.post(f"{CF_BASE}/pdf").mock(
             return_value=httpx.Response(200, content=b"%PDF")
         )
         await client.pdf("https://example.com", format="Letter", landscape=True)
     sent = json.loads(route.calls[0].request.content)
-    assert sent["pdfOptions"] == {"format": "Letter", "landscape": True}
     assert "format" not in sent
     assert "landscape" not in sent
 
@@ -378,7 +378,8 @@ async def test_cookies_forwarded(client):
 
 
 @pytest.mark.asyncio
-async def test_custom_headers_forwarded(client):
+async def test_custom_headers_mapped_to_cf_api(client):
+    """headers should be sent as setExtraHTTPHeaders to CF API."""
     custom_headers = {"X-Auth": "token123"}
     with respx.mock:
         route = respx.post(f"{CF_BASE}/markdown").mock(
@@ -386,7 +387,156 @@ async def test_custom_headers_forwarded(client):
         )
         await client.markdown("https://example.com", headers=custom_headers)
     sent = json.loads(route.calls[0].request.content)
-    assert sent["headers"] == custom_headers
+    assert sent["setExtraHTTPHeaders"] == custom_headers
+    assert "headers" not in sent
+
+
+# ---------------------------------------------------------------------------
+# Parameter mapping: wait_for → waitForSelector
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_content_maps_wait_for(client):
+    """wait_for should be sent as waitForSelector to CF API."""
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content("https://example.com", wait_for=".main")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["waitForSelector"] == {"selector": ".main"}
+    assert "wait_for" not in sent
+
+
+@pytest.mark.asyncio
+async def test_screenshot_maps_wait_for(client):
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/screenshot").mock(
+            return_value=httpx.Response(200, content=b"\x89PNG")
+        )
+        await client.screenshot("https://example.com", wait_for="#app")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["waitForSelector"] == {"selector": "#app"}
+    assert "wait_for" not in sent
+
+
+@pytest.mark.asyncio
+async def test_a11y_maps_wait_for(client):
+    snapshot = {"html": "<html/>", "screenshot": "base64...", "title": "Test"}
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/snapshot").mock(
+            return_value=httpx.Response(
+                200, json={"success": True, "result": snapshot}
+            )
+        )
+        await client.a11y("https://example.com", wait_for="main")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["waitForSelector"] == {"selector": "main"}
+    assert "wait_for" not in sent
+
+
+# ---------------------------------------------------------------------------
+# Parameter mapping: timeout → gotoOptions.timeout
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_content_maps_timeout(client):
+    """timeout should be sent as gotoOptions.timeout to CF API."""
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content("https://example.com", timeout=5000)
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["gotoOptions"]["timeout"] == 5000
+    assert "timeout" not in sent
+
+
+# ---------------------------------------------------------------------------
+# Parameter mapping: wait_until → gotoOptions.waitUntil
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_content_maps_wait_until(client):
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content("https://example.com", wait_until="networkidle0")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["gotoOptions"]["waitUntil"] == "networkidle0"
+    assert "wait_until" not in sent
+
+
+@pytest.mark.asyncio
+async def test_timeout_and_wait_until_merge(client):
+    """Both timeout and wait_until should merge into gotoOptions."""
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content(
+            "https://example.com", timeout=3000, wait_until="networkidle2"
+        )
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["gotoOptions"] == {"timeout": 3000, "waitUntil": "networkidle2"}
+
+
+# ---------------------------------------------------------------------------
+# Parameter mapping: user_agent → userAgent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_markdown_maps_user_agent(client):
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/markdown").mock(
+            return_value=httpx.Response(200, text="# Hello")
+        )
+        await client.markdown("https://example.com", user_agent="MyBot/1.0")
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["userAgent"] == "MyBot/1.0"
+    assert "user_agent" not in sent
+
+
+# ---------------------------------------------------------------------------
+# Combined mapping: all params together
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_all_params_mapped_together(client):
+    """All user-friendly params should map correctly when used together."""
+    cookies = [{"name": "s", "value": "v"}]
+    custom_headers = {"X-Auth": "tok"}
+    with respx.mock:
+        route = respx.post(f"{CF_BASE}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content(
+            "https://example.com",
+            wait_for=".loaded",
+            headers=custom_headers,
+            cookies=cookies,
+            timeout=10000,
+            wait_until="networkidle0",
+            user_agent="Bot/2.0",
+        )
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["waitForSelector"] == {"selector": ".loaded"}
+    assert sent["setExtraHTTPHeaders"] == {"X-Auth": "tok"}
+    assert sent["cookies"] == cookies
+    assert sent["gotoOptions"] == {"timeout": 10000, "waitUntil": "networkidle0"}
+    assert sent["userAgent"] == "Bot/2.0"
+    # None of the snake_case originals should remain
+    assert "wait_for" not in sent
+    assert "headers" not in sent
+    assert "timeout" not in sent
+    assert "wait_until" not in sent
+    assert "user_agent" not in sent
 
 
 # ---------------------------------------------------------------------------

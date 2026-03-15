@@ -116,6 +116,48 @@ def _transform_crawl_opts(opts: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _transform_common_opts(opts: dict[str, Any]) -> dict[str, Any]:
+    """Map common user-friendly snake_case params to CF API camelCase.
+
+    Mappings::
+
+        wait_for   → waitForSelector
+        headers    → setExtraHTTPHeaders
+        timeout    → gotoOptions.timeout
+        wait_until → gotoOptions.waitUntil
+        user_agent → userAgent
+    """
+    out = dict(opts)
+
+    # wait_for → waitForSelector (CF API expects an object, not a plain string)
+    wait_for = out.pop("wait_for", None)
+    if wait_for is not None:
+        out["waitForSelector"] = {"selector": wait_for}
+
+    # headers → setExtraHTTPHeaders
+    headers = out.pop("headers", None)
+    if headers is not None:
+        out["setExtraHTTPHeaders"] = headers
+
+    # timeout + wait_until → gotoOptions
+    timeout = out.pop("timeout", None)
+    wait_until = out.pop("wait_until", None)
+    if timeout is not None or wait_until is not None:
+        goto_options: dict[str, Any] = out.get("gotoOptions", {})
+        if timeout is not None:
+            goto_options["timeout"] = timeout
+        if wait_until is not None:
+            goto_options["waitUntil"] = wait_until
+        out["gotoOptions"] = goto_options
+
+    # user_agent → userAgent
+    user_agent = out.pop("user_agent", None)
+    if user_agent is not None:
+        out["userAgent"] = user_agent
+
+    return out
+
+
 class CFBrowserDirect:
     """Call Cloudflare Browser Rendering API directly (no Worker needed).
 
@@ -183,24 +225,29 @@ class CFBrowserDirect:
 
     async def content(self, url: str, *, no_cache: bool = False, **opts: Any) -> str:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         return await self._post_text("/content", payload)
 
     async def screenshot(self, url: str, *, no_cache: bool = False, **opts: Any) -> bytes:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         payload = _transform_screenshot_opts(payload)
         return await self._post_bytes("/screenshot", payload)
 
     async def pdf(self, url: str, *, no_cache: bool = False, **opts: Any) -> bytes:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         payload = _transform_pdf_opts(payload)
         return await self._post_bytes("/pdf", payload)
 
     async def markdown(self, url: str, *, no_cache: bool = False, **opts: Any) -> str:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         return await self._post_text("/markdown", payload)
 
     async def snapshot(self, url: str, *, no_cache: bool = False, **opts: Any) -> dict:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         return await self._post_json("/snapshot", payload)
 
     async def scrape(
@@ -212,6 +259,7 @@ class CFBrowserDirect:
         **opts: Any,
     ) -> dict:
         payload = self._strip_no_cache({"url": url, "elements": selectors, **opts})
+        payload = _transform_common_opts(payload)
         payload = _transform_scrape_opts(payload)
         return await self._post_json("/scrape", payload)
 
@@ -224,15 +272,18 @@ class CFBrowserDirect:
         **opts: Any,
     ) -> dict:
         payload = self._strip_no_cache({"url": url, "prompt": prompt, **opts})
+        payload = _transform_common_opts(payload)
         return await self._post_json("/json", payload)
 
     async def links(self, url: str, *, no_cache: bool = False, **opts: Any) -> list[dict]:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         return await self._post_json("/links", payload)
 
     async def a11y(self, url: str, *, no_cache: bool = False, **opts: Any) -> dict:
         """Accessibility tree via /snapshot with screenshot data stripped."""
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         snapshot = await self._post_json("/snapshot", payload)
         if isinstance(snapshot, dict):
             snapshot.pop("screenshot", None)
@@ -241,6 +292,7 @@ class CFBrowserDirect:
 
     async def crawl(self, url: str, *, no_cache: bool = False, **opts: Any) -> str:
         payload = self._strip_no_cache({"url": url, **opts})
+        payload = _transform_common_opts(payload)
         payload = _transform_crawl_opts(payload)
         data = await self._post_json("/crawl", payload)
         if isinstance(data, str):

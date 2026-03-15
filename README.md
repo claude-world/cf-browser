@@ -211,7 +211,7 @@ Three independent packages:
 | `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
 | `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
 
-All tools accept optional `cookies` and `headers` parameters for authenticated scraping.
+All tools accept optional `cookies`, `headers`, `wait_for`, `wait_until`, and `user_agent` parameters. Use `wait_until="networkidle0"` for SPA sites (React, Next.js, X/Twitter).
 
 ### Examples in Claude Code
 
@@ -244,16 +244,16 @@ All routes (except `/health`) require `Authorization: Bearer <api-key>` header.
 | Route | Method | Body | Cache | Response |
 |-------|--------|------|-------|----------|
 | `/health` | GET | — | — | `{"status":"ok"}` |
-| `/content` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 1hr | HTML |
-| `/markdown` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 1hr | Markdown |
-| `/screenshot` | POST | `{url, width?, height?, full_page?, cookies?, headers?, no_cache?}` | R2 24hr | PNG |
-| `/pdf` | POST | `{url, format?, landscape?, cookies?, headers?, no_cache?}` | R2 24hr | PDF |
-| `/snapshot` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
-| `/scrape` | POST | `{url, elements[], wait_for?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
-| `/json` | POST | `{url, prompt, schema?, cookies?, headers?, no_cache?}` | None | JSON |
-| `/links` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 1hr | JSON |
-| `/a11y` | POST | `{url, wait_for?, cookies?, headers?, no_cache?}` | KV 5min | JSON |
-| `/crawl` | POST | `{url, limit?, no_cache?}` | — | `{"job_id":"..."}` |
+| `/content` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | HTML |
+| `/markdown` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | Markdown |
+| `/screenshot` | POST | `{url, width?, height?, full_page?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PNG |
+| `/pdf` | POST | `{url, format?, landscape?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PDF |
+| `/snapshot` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
+| `/scrape` | POST | `{url, elements[], wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
+| `/json` | POST | `{url, prompt, schema?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | None | JSON |
+| `/links` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | JSON |
+| `/a11y` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 5min | JSON |
+| `/crawl` | POST | `{url, limit?, user_agent?, cookies?, headers?, no_cache?}` | — | `{"job_id":"..."}` |
 | `/crawl/:id` | GET | — | R2 | JSON |
 
 ### Authenticated requests
@@ -383,7 +383,7 @@ async with CFBrowser(
 | `crawl_status(job_id)` | `dict` | Job status |
 | `crawl_wait(job_id, timeout, poll_interval)` | `dict` | Wait for completion |
 
-All methods accept `no_cache=True` to bypass caching, and `cookies`/`headers` for authenticated access.
+All methods accept `no_cache=True` to bypass caching, `cookies`/`headers` for authenticated access, `wait_for` to wait for a CSS selector, `wait_until` for navigation strategy (`networkidle0` for SPAs), and `user_agent` for custom User-Agent.
 
 ## Security
 
@@ -480,6 +480,7 @@ cf-browser/
 │   │   │   └── crawl.ts     POST/GET /crawl
 │   │   └── lib/
 │   │       ├── cf-api.ts    CF Browser Rendering client
+│   │       ├── param-map.ts snake_case → CF API camelCase mapping
 │   │       ├── cache-key.ts SHA-256 cache keys
 │   │       └── validate-url.ts  SSRF prevention
 │   ├── tests/

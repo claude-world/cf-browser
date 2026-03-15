@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { CfBrowserApi } from "../lib/cf-api.js";
 import { validateUrl } from "../lib/validate-url.js";
+import { mapToCfParams } from "../lib/param-map.js";
 import { getCached, setCached, buildCacheKey } from "../middleware/cache.js";
 
 const TTL = 60 * 60 * 24; // 24 hours
@@ -41,8 +42,9 @@ app.post("/", async (c) => {
   // Strip format/landscape — CF Browser Rendering REST API /pdf endpoint
   // does not accept these options (unlike the Puppeteer Workers Binding API).
   const { no_cache: _skip, format: _fmt, landscape: _ls, ...cfBody } = body;
+  const cfPayload = mapToCfParams(cfBody);
 
-  const result = await api.pdf(cfBody);
+  const result = await api.pdf(cfPayload);
 
   if (!result.ok) {
     return c.json({ error: result.message, status: result.status }, result.status as 502);
