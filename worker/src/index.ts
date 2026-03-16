@@ -13,6 +13,11 @@ import jsonRoute from "./routes/json.js";
 import linksRoute from "./routes/links.js";
 import crawlRoute from "./routes/crawl.js";
 import a11yRoute from "./routes/a11y.js";
+import clickRoute from "./routes/click.js";
+import typeRoute from "./routes/type.js";
+import evaluateRoute from "./routes/evaluate.js";
+import interactRoute from "./routes/interact.js";
+import submitFormRoute from "./routes/submit-form.js";
 
 const app = new Hono<AppEnv>();
 
@@ -28,7 +33,7 @@ app.use(
   "*",
   cors({
     origin: "*",
-    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
     exposeHeaders: ["X-Cache", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
   })
@@ -39,13 +44,20 @@ app.use(
 // ---------------------------------------------------------------------------
 
 app.get("/health", (c) => {
-  return c.json({ status: "ok", version: "1.0.0" });
+  return c.json({
+    status: "ok",
+    version: "2.0.0",
+    capabilities: {
+      interact: !!c.env.BROWSER,
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Authenticated + rate-limited routes
 // ---------------------------------------------------------------------------
 
+// Read-only routes
 app.use("/content/*", authMiddleware, rateLimitMiddleware);
 app.use("/screenshot/*", authMiddleware, rateLimitMiddleware);
 app.use("/pdf/*", authMiddleware, rateLimitMiddleware);
@@ -57,10 +69,18 @@ app.use("/links/*", authMiddleware, rateLimitMiddleware);
 app.use("/crawl/*", authMiddleware, rateLimitMiddleware);
 app.use("/a11y/*", authMiddleware, rateLimitMiddleware);
 
+// Interaction routes (require BROWSER binding)
+app.use("/click/*", authMiddleware, rateLimitMiddleware);
+app.use("/type/*", authMiddleware, rateLimitMiddleware);
+app.use("/evaluate/*", authMiddleware, rateLimitMiddleware);
+app.use("/interact/*", authMiddleware, rateLimitMiddleware);
+app.use("/submit-form/*", authMiddleware, rateLimitMiddleware);
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
+// Read-only
 app.route("/content", contentRoute);
 app.route("/screenshot", screenshotRoute);
 app.route("/pdf", pdfRoute);
@@ -71,6 +91,13 @@ app.route("/json", jsonRoute);
 app.route("/links", linksRoute);
 app.route("/crawl", crawlRoute);
 app.route("/a11y", a11yRoute);
+
+// Interaction
+app.route("/click", clickRoute);
+app.route("/type", typeRoute);
+app.route("/evaluate", evaluateRoute);
+app.route("/interact", interactRoute);
+app.route("/submit-form", submitFormRoute);
 
 // ---------------------------------------------------------------------------
 // 404 fallback

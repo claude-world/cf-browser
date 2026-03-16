@@ -1,6 +1,6 @@
 # cf-browser-mcp
 
-MCP Server with 10 browser tools for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/).
+MCP Server with 15 browser tools for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/).
 
 ## Installation
 
@@ -10,7 +10,27 @@ pip install cf-browser-mcp
 
 ## Setup
 
-Add to your `.mcp.json`:
+Add to your `.mcp.json`. Two modes are supported:
+
+### Direct Mode (no Worker needed)
+
+```json
+{
+  "mcpServers": {
+    "cf-browser": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "cf_browser_mcp.server"],
+      "env": {
+        "CF_ACCOUNT_ID": "your-cloudflare-account-id",
+        "CF_API_TOKEN": "your-cloudflare-api-token"
+      }
+    }
+  }
+}
+```
+
+### Worker Mode (via deployed Cloudflare Worker)
 
 ```json
 {
@@ -30,6 +50,8 @@ Add to your `.mcp.json`:
 
 ## Tools
 
+### Read-Only Tools
+
 | Tool | Description |
 |------|-------------|
 | `browser_markdown` | Convert page to clean Markdown |
@@ -43,12 +65,23 @@ Add to your `.mcp.json`:
 | `browser_crawl` | Start async multi-page crawl |
 | `browser_crawl_status` | Check crawl progress |
 
+### Interaction Tools (Worker Mode only)
+
+| Tool | Description |
+|------|-------------|
+| `browser_click` | Click an element on a page |
+| `browser_type` | Type text into an input field |
+| `browser_evaluate` | Execute JavaScript and return result |
+| `browser_interact` | Execute a chain of browser actions |
+| `browser_submit_form` | Fill and submit a form |
+
 All tools accept optional `cookies` and `headers` for authenticated scraping.
 
 ## Requirements
 
 - Python 3.10+
-- A deployed [CF Browser Worker](https://github.com/claude-world/cf-browser)
+- **Direct Mode**: Cloudflare Account ID + API Token
+- **Worker Mode**: A deployed [CF Browser Worker](https://github.com/claude-world/cf-browser)
 
 ## License
 

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-17
+
+### Added
+
+- **Browser interaction tools** — 5 new MCP tools for clicking, typing, form submission, JavaScript execution, and multi-step action chains. Requires Worker mode with `BROWSER` binding (Workers Paid plan)
+  - `browser_click` — click an element and return resulting page state
+  - `browser_type` — type text into an input field, with optional clear-before-type
+  - `browser_evaluate` — execute JavaScript in page context (10KB limit, 10s timeout)
+  - `browser_interact` — chain up to 20 actions (click, type, wait, screenshot, evaluate, select, scroll, navigate) with 50s total execution budget
+  - `browser_submit_form` — fill form fields and submit (sugar over interact)
+- **`@cloudflare/puppeteer` integration** — new `withBrowser()` lifecycle helper manages browser launch, page setup (viewport, user agent, headers, cookies), navigation, and cleanup
+- **`DELETE /crawl/:id`** — delete cached crawl results from R2 storage
+- **SDK interaction methods** — `click()`, `type_text()`, `evaluate()`, `interact()`, `submit_form()`, `delete_crawl()` on `CFBrowser` class
+- **Direct mode stubs** — all 6 interaction methods raise `NotImplementedError` with clear guidance on `CFBrowserDirect`
+- **SDK models** — `ClickResult`, `EvaluateResult`, `InteractAction`, `InteractResult`, `FormField` Pydantic models
+- **Health endpoint** — now reports `capabilities.interact: boolean` based on BROWSER binding availability
+- **CORS** — `DELETE` method added to allowed methods
+
+### Changed
+
+- Worker, SDK, and MCP Server versions bumped to 2.0.0
+- MCP Server description updated to 15 tools (was 10)
+
+### Security
+
+- **Selector injection**: 500-character limit on all CSS selectors
+- **Script injection**: 10KB limit and 10s execution timeout on evaluate scripts
+- **Action chain abuse**: Max 20 actions per interact call, 50s total timeout
+- **SSRF in navigate actions**: `validateUrl()` applied to navigate action URLs within interact chains
+- **No BROWSER binding**: Routes return 501; SDK raises `NotImplementedError`; MCP returns helpful error JSON
+
 ## [1.2.0] - 2026-03-15
 
 ### Added

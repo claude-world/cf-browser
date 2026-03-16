@@ -1,4 +1,4 @@
-"""MCP Server wrapping the CF Browser Python SDK as 10 tools."""
+"""MCP Server wrapping the CF Browser Python SDK as 15 tools."""
 
 from __future__ import annotations
 
@@ -89,8 +89,8 @@ def _domain_from_url(url: str) -> str:
 
 
 def _timestamp() -> str:
-    """Return a compact integer timestamp string."""
-    return str(int(time.time()))
+    """Return a compact timestamp string with millisecond precision to avoid collisions."""
+    return str(int(time.time() * 1000))
 
 
 def _build_kwargs(
@@ -99,13 +99,15 @@ def _build_kwargs(
     wait_for: str = "",
     wait_until: str = "",
     user_agent: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> dict[str, Any]:
     """Parse tool params into SDK kwargs.
 
-    Handles JSON parsing for cookies/headers strings and passes through
-    browser-control params (wait_for, wait_until, user_agent) which the
-    SDK translates to CF API equivalents (waitForSelector,
-    gotoOptions.waitUntil, userAgent).
+    Handles JSON parsing for cookies/headers/script/style strings and
+    passes through browser-control params (wait_for, wait_until, user_agent)
+    which the SDK translates to CF API equivalents.
     """
     kwargs: dict[str, Any] = {}
     if cookies:
@@ -124,6 +126,21 @@ def _build_kwargs(
         kwargs["wait_until"] = wait_until
     if user_agent:
         kwargs["user_agent"] = user_agent
+    if add_script_tag:
+        try:
+            kwargs["add_script_tag"] = json.loads(add_script_tag)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid add_script_tag JSON: {e}") from e
+    if add_style_tag:
+        try:
+            kwargs["add_style_tag"] = json.loads(add_style_tag)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid add_style_tag JSON: {e}") from e
+    if reject_resource_types:
+        try:
+            kwargs["reject_resource_types"] = json.loads(reject_resource_types)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid reject_resource_types JSON: {e}") from e
     return kwargs
 
 
@@ -140,6 +157,9 @@ async def browser_content(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Return the fully-rendered HTML of *url*.
 
@@ -153,9 +173,15 @@ async def browser_content(
                  Example: [{"name":"session","value":"abc","domain":".example.com"}]
         headers: Optional JSON object of custom HTTP headers.
                  Example: {"X-Auth":"token123"}
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     return await client.content(url, **kwargs)
 
 
@@ -175,6 +201,9 @@ async def browser_screenshot(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Capture a PNG screenshot of *url* and return the local file path.
 
@@ -184,14 +213,16 @@ async def browser_screenshot(
         height: Viewport height in pixels (default 720).
         full_page: When True, capture the full scrollable page.
         wait_for: Optional CSS selector to wait for before capturing.
-        wait_until: When to consider navigation done — "load" | "domcontentloaded"
-                    | "networkidle0" | "networkidle2" (default: "load").
+        wait_until: Navigation strategy — "load" | "domcontentloaded" | "networkidle0" | "networkidle2".
         user_agent: Custom User-Agent string for the browser.
-        cookies: Optional JSON array of cookie objects for authenticated pages.
+        cookies: Optional JSON array of cookie objects.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject. Example: [{"content":"document.title='X'"}]
+        add_style_tag: Optional JSON array of styles to inject. Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block. Example: ["image"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     data: bytes = await client.screenshot(
         url, width=width, height=height, full_page=full_page, **kwargs
     )
@@ -221,6 +252,9 @@ async def browser_pdf(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Render *url* as a PDF and return the local file path.
 
@@ -234,9 +268,15 @@ async def browser_pdf(
         user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     if landscape:
         kwargs["landscape"] = True
     data: bytes = await client.pdf(url, format=format, **kwargs)
@@ -264,6 +304,9 @@ async def browser_markdown(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Return the Markdown representation of *url*.
 
@@ -275,9 +318,15 @@ async def browser_markdown(
         user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     return await client.markdown(url, **kwargs)
 
 
@@ -295,6 +344,9 @@ async def browser_scrape(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Extract DOM elements matching each CSS selector and return as JSON.
 
@@ -307,9 +359,15 @@ async def browser_scrape(
         user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     result = await client.scrape(url, selectors, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -333,6 +391,9 @@ async def browser_json(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Use AI to extract structured data from *url* and return as JSON.
 
@@ -346,9 +407,15 @@ async def browser_json(
         user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     result = await client.json_extract(url, prompt, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -366,6 +433,9 @@ async def browser_links(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Return all hyperlinks found on *url* as a JSON array of {href, text} objects.
 
@@ -377,9 +447,15 @@ async def browser_links(
         user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
     result = await client.links(url, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -478,6 +554,9 @@ async def browser_a11y(
     user_agent: str = "",
     cookies: str = "",
     headers: str = "",
+    add_script_tag: str = "",
+    add_style_tag: str = "",
+    reject_resource_types: str = "",
 ) -> str:
     """Return the accessibility tree of *url* as JSON.
 
@@ -493,16 +572,270 @@ async def browser_a11y(
         user_agent: Custom User-Agent string for the browser.
         cookies: Optional JSON array of cookie objects for authenticated pages.
         headers: Optional JSON object of custom HTTP headers.
+        add_script_tag: Optional JSON array of scripts to inject before capture.
+                        Example: [{"content":"document.title='Modified'"}]
+        add_style_tag: Optional JSON array of styles to inject before capture.
+                       Example: [{"content":"body{background:red}"}]
+        reject_resource_types: Optional JSON array of resource types to block.
+                               Example: ["image","stylesheet"]
+    """
+    client = get_client()
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    result = await client.a11y(url, **kwargs)
+    return json.dumps(result, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 11: browser_click
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "Click an element on a web page (requires Worker mode with BROWSER binding)"
+    )
+)
+async def browser_click(
+    url: str,
+    selector: str,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
+    """Navigate to *url*, click the element matching *selector*, and return page state.
+
+    Args:
+        url: The page URL.
+        selector: CSS selector of the element to click (e.g. "button#submit", "a.nav-link").
+        wait_for: Optional CSS selector to wait for before clicking.
+        wait_until: Navigation strategy — "load" | "domcontentloaded" | "networkidle0" | "networkidle2".
+        user_agent: Custom User-Agent string.
+        cookies: Optional JSON array of cookie objects.
+        headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
     kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
-    result = await client.a11y(url, **kwargs)
-    return json.dumps(result, ensure_ascii=False)
+    try:
+        result = await client.click(url, selector, **kwargs)
+        return json.dumps(result, ensure_ascii=False)
+    except NotImplementedError as e:
+        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 12: browser_type
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "Type text into an input field on a web page (requires Worker mode with BROWSER binding)"
+    )
+)
+async def browser_type(
+    url: str,
+    selector: str,
+    text: str,
+    clear: bool = False,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
+    """Navigate to *url*, type *text* into the input matching *selector*.
+
+    Args:
+        url: The page URL.
+        selector: CSS selector of the input element (e.g. "input#username", "textarea.comment").
+        text: The text to type.
+        clear: When True, clear the field before typing (default False).
+        wait_for: Optional CSS selector to wait for before typing.
+        wait_until: Navigation strategy — "load" | "domcontentloaded" | "networkidle0" | "networkidle2".
+        user_agent: Custom User-Agent string.
+        cookies: Optional JSON array of cookie objects.
+        headers: Optional JSON object of custom HTTP headers.
+    """
+    client = get_client()
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    try:
+        result = await client.type_text(url, selector, text, clear=clear, **kwargs)
+        return json.dumps(result, ensure_ascii=False)
+    except NotImplementedError as e:
+        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 13: browser_evaluate
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "Execute JavaScript on a web page and return the result "
+        "(requires Worker mode with BROWSER binding)"
+    )
+)
+async def browser_evaluate(
+    url: str,
+    script: str,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
+    """Navigate to *url* and execute *script* in the page context.
+
+    Args:
+        url: The page URL.
+        script: JavaScript code to execute (max 10KB). Example: "document.title"
+                or "document.querySelectorAll('a').length".
+        wait_for: Optional CSS selector to wait for before executing.
+        wait_until: Navigation strategy — "load" | "domcontentloaded" | "networkidle0" | "networkidle2".
+        user_agent: Custom User-Agent string.
+        cookies: Optional JSON array of cookie objects.
+        headers: Optional JSON object of custom HTTP headers.
+    """
+    client = get_client()
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    try:
+        result = await client.evaluate(url, script, **kwargs)
+        return json.dumps(result, ensure_ascii=False)
+    except NotImplementedError as e:
+        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 14: browser_interact
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "Execute a chain of browser actions (click, type, wait, screenshot, JS eval) — "
+        "the most powerful interaction tool (requires Worker mode with BROWSER binding)"
+    )
+)
+async def browser_interact(
+    url: str,
+    actions: str,
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
+    """Navigate to *url* and execute a sequence of actions.
+
+    Args:
+        url: The starting page URL.
+        actions: JSON array of action objects. Max 20 actions, 50s total timeout.
+                 Each action has an "action" key plus action-specific params.
+                 Supported actions:
+                 - {"action":"click", "selector":"#btn"}
+                 - {"action":"type", "selector":"#input", "text":"hello", "clear":true}
+                 - {"action":"wait", "selector":".loaded", "timeout":5000}
+                 - {"action":"navigate", "url":"https://..."}
+                 - {"action":"screenshot"}
+                 - {"action":"evaluate", "script":"document.title"}
+                 - {"action":"select", "selector":"select#country", "value":"US"}
+                 - {"action":"scroll", "x":0, "y":500}
+                 Example: [{"action":"type","selector":"#user","text":"admin"},
+                           {"action":"click","selector":"#login"},
+                           {"action":"wait","selector":".dashboard"}]
+        wait_for: Optional CSS selector to wait for before starting actions.
+        wait_until: Navigation strategy — "load" | "domcontentloaded" | "networkidle0" | "networkidle2".
+        user_agent: Custom User-Agent string.
+        cookies: Optional JSON array of cookie objects.
+        headers: Optional JSON object of custom HTTP headers.
+    """
+    client = get_client()
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+
+    try:
+        parsed_actions = json.loads(actions)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid actions JSON: {e}"}, ensure_ascii=False)
+
+    if not isinstance(parsed_actions, list):
+        return json.dumps({"error": "actions must be a JSON array"}, ensure_ascii=False)
+
+    try:
+        result = await client.interact(url, parsed_actions, **kwargs)
+        return json.dumps(result, ensure_ascii=False)
+    except NotImplementedError as e:
+        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Tool 15: browser_submit_form
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "Fill and submit a form on a web page "
+        "(requires Worker mode with BROWSER binding)"
+    )
+)
+async def browser_submit_form(
+    url: str,
+    fields: str,
+    submit_selector: str = "",
+    wait_for: str = "",
+    wait_until: str = "",
+    user_agent: str = "",
+    cookies: str = "",
+    headers: str = "",
+) -> str:
+    """Navigate to *url*, fill form fields, and submit.
+
+    Args:
+        url: The page URL containing the form.
+        fields: JSON object mapping CSS selector → value for each field.
+                Example: {"#username":"admin", "#password":"secret", "#email":"a@b.com"}
+        submit_selector: Optional CSS selector for the submit button.
+                         If empty, submits the first <form> on the page.
+        wait_for: Optional CSS selector to wait for before filling.
+        wait_until: Navigation strategy — "load" | "domcontentloaded" | "networkidle0" | "networkidle2".
+        user_agent: Custom User-Agent string.
+        cookies: Optional JSON array of cookie objects.
+        headers: Optional JSON object of custom HTTP headers.
+    """
+    client = get_client()
+    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+
+    try:
+        parsed_fields = json.loads(fields)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid fields JSON: {e}"}, ensure_ascii=False)
+
+    if not isinstance(parsed_fields, dict):
+        return json.dumps({"error": "fields must be a JSON object"}, ensure_ascii=False)
+
+    try:
+        result = await client.submit_form(
+            url,
+            parsed_fields,
+            submit_selector=submit_selector or None,
+            **kwargs,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    except NotImplementedError as e:
+        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main():
+    """Entry point for ``uvx cf-browser-mcp`` / ``pipx run cf-browser-mcp``."""
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

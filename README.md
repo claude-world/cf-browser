@@ -2,7 +2,7 @@
 
 The fastest way to read any website from [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Open-source tool that gives Claude Code **10 MCP tools + 6 ready-to-use Skills** for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility trees, AI-powered data extraction, and multi-page crawling. Powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier. Supports **Direct Mode** (no Worker needed) and **Worker Mode** (with caching & rate limiting).
+Open-source tool that gives Claude Code **15 MCP tools + 6 ready-to-use Skills** for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility trees, AI-powered data extraction, multi-page crawling, and **browser interaction** (click, type, form submit, JS eval, action chains). Powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier. Supports **Direct Mode** (no Worker needed) and **Worker Mode** (with caching, rate limiting, and interaction).
 
 [![PyPI - cf-browser](https://img.shields.io/pypi/v/cf-browser?label=cf-browser)](https://pypi.org/project/cf-browser/)
 [![PyPI - cf-browser-mcp](https://img.shields.io/pypi/v/cf-browser-mcp?label=cf-browser-mcp)](https://pypi.org/project/cf-browser-mcp/)
@@ -14,9 +14,10 @@ Open-source tool that gives Claude Code **10 MCP tools + 6 ready-to-use Skills**
 Claude Code's built-in `WebFetch` only returns raw HTML. Single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser solves this:
 
 - **JS execution** — full headless Chrome renders the page before extraction
-- **10 purpose-built tools** — markdown, screenshots, PDFs, a11y trees, AI extraction, crawling
+- **15 purpose-built tools** — markdown, screenshots, PDFs, a11y trees, AI extraction, crawling, plus click/type/evaluate/interact/form-submit
+- **Browser interaction** — click buttons, fill forms, execute JS, chain multi-step actions (Worker mode)
 - **Authenticated scraping** — inject cookies and custom headers for logged-in pages
-- **Zero cost** — runs entirely on Cloudflare's free tier
+- **Zero cost** — read-only tools run on Cloudflare's free tier; interaction tools require Workers Paid ($5/mo)
 - **Edge-based** — global low latency from 300+ Cloudflare locations
 
 ## Quick Start
@@ -152,7 +153,7 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Restart Claude Code. You'll see 10 `browser_*` tools available.
+Restart Claude Code. You'll see 15 `browser_*` tools available.
 
 </details>
 
@@ -164,7 +165,7 @@ Restart Claude Code. You'll see 10 `browser_*` tools available.
                           └──────────┬───────────┘
                                      │
                           ┌──────────▼───────────┐
-                          │  MCP Server (10 tools)│
+                          │  MCP Server (15 tools)│
                           └──────────┬───────────┘
                                      │
                     ┌────────────────┴────────────────┐
@@ -192,11 +193,13 @@ Three independent packages:
 
 | Package | Language | Purpose |
 |---------|----------|---------|
-| `worker/` | TypeScript (Hono) | Edge proxy with auth, cache, rate limiting |
+| `worker/` | TypeScript (Hono + Puppeteer) | Edge proxy with auth, cache, rate limiting, browser interaction |
 | `sdk/` (`cf-browser` on PyPI) | Python (httpx) | Async client library |
-| `mcp-server/` (`cf-browser-mcp` on PyPI) | Python (FastMCP) | 10 MCP tools for Claude Code |
+| `mcp-server/` (`cf-browser-mcp` on PyPI) | Python (FastMCP) | 15 MCP tools for Claude Code |
 
 ## MCP Tools
+
+### Read-only tools (Direct + Worker mode)
 
 | Tool | Input | Output | Use case |
 |------|-------|--------|----------|
@@ -210,6 +213,16 @@ Three independent packages:
 | `browser_a11y` | url | JSON | Accessibility tree — LLM-friendly structured data |
 | `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
 | `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
+
+### Interaction tools (Worker mode only — requires BROWSER binding)
+
+| Tool | Input | Output | Use case |
+|------|-------|--------|----------|
+| `browser_click` | url, selector | JSON | Click a button/link and get resulting page |
+| `browser_type` | url, selector, text | JSON | Type into input fields |
+| `browser_evaluate` | url, script | JSON | Execute JavaScript and get return value |
+| `browser_interact` | url, actions[] | JSON | Chain multiple actions (click, type, wait, screenshot, etc.) |
+| `browser_submit_form` | url, fields | JSON | Fill and submit forms in one call |
 
 All tools accept optional `cookies`, `headers`, `wait_for`, `wait_until`, and `user_agent` parameters. Use `wait_until="networkidle0"` for SPA sites (React, Next.js, X/Twitter).
 
@@ -233,6 +246,20 @@ All tools accept optional `cookies`, `headers`, `wait_for`, `wait_until`, and `u
 
 "Find all broken links on our site"
 → browser_crawl("https://example.com", limit=50) → browser_crawl_status(job_id, wait=True)
+
+"Log into our staging site and check the dashboard"
+→ browser_interact("https://staging.example.com/login", actions=[
+    {"action":"type", "selector":"#email", "text":"admin@example.com"},
+    {"action":"type", "selector":"#password", "text":"secret"},
+    {"action":"click", "selector":"button[type=submit]"},
+    {"action":"wait", "selector":".dashboard"},
+    {"action":"screenshot"}
+  ])
+
+"Fill out the contact form"
+→ browser_submit_form("https://example.com/contact",
+    fields={"#name":"Claude", "#email":"claude@example.com", "#message":"Hello!"},
+    submit_selector="button.submit")
 ```
 
 ## Worker API Reference
@@ -243,7 +270,7 @@ All routes (except `/health`) require `Authorization: Bearer <api-key>` header.
 
 | Route | Method | Body | Cache | Response |
 |-------|--------|------|-------|----------|
-| `/health` | GET | — | — | `{"status":"ok"}` |
+| `/health` | GET | — | — | `{"status":"ok","version":"2.0.0","capabilities":{...}}` |
 | `/content` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | HTML |
 | `/markdown` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | Markdown |
 | `/screenshot` | POST | `{url, width?, height?, full_page?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PNG |
@@ -255,6 +282,14 @@ All routes (except `/health`) require `Authorization: Bearer <api-key>` header.
 | `/a11y` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 5min | JSON |
 | `/crawl` | POST | `{url, limit?, user_agent?, cookies?, headers?, no_cache?}` | — | `{"job_id":"..."}` |
 | `/crawl/:id` | GET | — | R2 | JSON |
+| `/crawl/:id` | DELETE | — | — | 204 No Content |
+| `/click` | POST | `{url, selector, wait_for?, ...}` | None | JSON |
+| `/type` | POST | `{url, selector, text, clear?, wait_for?, ...}` | None | JSON |
+| `/evaluate` | POST | `{url, script, wait_for?, ...}` | None | JSON |
+| `/interact` | POST | `{url, actions[], wait_for?, ...}` | None | JSON |
+| `/submit-form` | POST | `{url, fields, submit_selector?, wait_for?, ...}` | None | JSON |
+
+Interaction routes (`/click`, `/type`, `/evaluate`, `/interact`, `/submit-form`) require the `BROWSER` binding. They return 501 if the binding is not configured.
 
 ### Authenticated requests
 
@@ -368,6 +403,8 @@ async with CFBrowser(
 
 ### SDK methods
 
+**Read-only (Direct + Worker mode):**
+
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `content(url, **opts)` | `str` | Rendered HTML |
@@ -383,7 +420,18 @@ async with CFBrowser(
 | `crawl_status(job_id)` | `dict` | Job status |
 | `crawl_wait(job_id, timeout, poll_interval)` | `dict` | Wait for completion |
 
-All methods accept `no_cache=True` to bypass caching, `cookies`/`headers` for authenticated access, `wait_for` to wait for a CSS selector, `wait_until` for navigation strategy (`networkidle0` for SPAs), and `user_agent` for custom User-Agent.
+**Interaction (Worker mode only):**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `click(url, selector, **opts)` | `dict` | Click element, return page state |
+| `type_text(url, selector, text, clear?, **opts)` | `dict` | Type into input field |
+| `evaluate(url, script, **opts)` | `dict` | Execute JS, return result |
+| `interact(url, actions, **opts)` | `dict` | Chain multiple actions |
+| `submit_form(url, fields, submit_selector?, **opts)` | `dict` | Fill and submit form |
+| `delete_crawl(job_id)` | `None` | Delete cached crawl result |
+
+All methods accept `no_cache=True` to bypass caching, `cookies`/`headers` for authenticated access, `wait_for` to wait for a CSS selector, `wait_until` for navigation strategy (`networkidle0` for SPAs), and `user_agent` for custom User-Agent. Interaction methods raise `NotImplementedError` in Direct mode.
 
 ## Security
 
@@ -423,7 +471,7 @@ cp -r skills/* .claude/skills/
 | R2 | 10GB storage | 10GB included |
 | Workers | 100K requests/day | 10M requests/mo |
 
-For most Claude Code usage, the free tier is sufficient.
+For most Claude Code usage, the free tier is sufficient. Interaction tools (click, type, evaluate, interact, submit-form) require the Workers Paid plan ($5/mo) for the BROWSER binding.
 
 ## Development
 
@@ -477,9 +525,15 @@ cf-browser/
 │   │   │   ├── json.ts      POST /json → JSON (AI)
 │   │   │   ├── links.ts     POST /links → JSON
 │   │   │   ├── a11y.ts      POST /a11y → JSON (accessibility tree)
-│   │   │   └── crawl.ts     POST/GET /crawl
+│   │   │   ├── crawl.ts     POST/GET/DELETE /crawl
+│   │   │   ├── click.ts     POST /click (interaction)
+│   │   │   ├── type.ts      POST /type (interaction)
+│   │   │   ├── evaluate.ts  POST /evaluate (interaction)
+│   │   │   ├── interact.ts  POST /interact (action chains)
+│   │   │   └── submit-form.ts POST /submit-form (interaction)
 │   │   └── lib/
 │   │       ├── cf-api.ts    CF Browser Rendering client
+│   │       ├── puppeteer.ts Puppeteer lifecycle helper (interaction)
 │   │       ├── param-map.ts snake_case → CF API camelCase mapping
 │   │       ├── cache-key.ts SHA-256 cache keys
 │   │       └── validate-url.ts  SSRF prevention
@@ -497,7 +551,7 @@ cf-browser/
 │   └── pyproject.toml
 ├── mcp-server/              MCP Server (cf-browser-mcp on PyPI)
 │   ├── src/cf_browser_mcp/
-│   │   └── server.py        10 MCP tool definitions
+│   │   └── server.py        15 MCP tool definitions
 │   └── pyproject.toml
 ├── examples/                Usage examples
 ├── setup.sh                 One-command setup script

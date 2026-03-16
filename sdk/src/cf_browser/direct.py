@@ -121,11 +121,14 @@ def _transform_common_opts(opts: dict[str, Any]) -> dict[str, Any]:
 
     Mappings::
 
-        wait_for   → waitForSelector
-        headers    → setExtraHTTPHeaders
-        timeout    → gotoOptions.timeout
-        wait_until → gotoOptions.waitUntil
-        user_agent → userAgent
+        wait_for              → waitForSelector
+        headers               → setExtraHTTPHeaders
+        timeout               → gotoOptions.timeout
+        wait_until            → gotoOptions.waitUntil
+        user_agent            → userAgent
+        add_script_tag        → addScriptTag
+        add_style_tag         → addStyleTag
+        reject_resource_types → rejectResourceTypes
     """
     out = dict(opts)
 
@@ -154,6 +157,21 @@ def _transform_common_opts(opts: dict[str, Any]) -> dict[str, Any]:
     user_agent = out.pop("user_agent", None)
     if user_agent is not None:
         out["userAgent"] = user_agent
+
+    # add_script_tag → addScriptTag
+    add_script_tag = out.pop("add_script_tag", None)
+    if add_script_tag is not None:
+        out["addScriptTag"] = add_script_tag
+
+    # add_style_tag → addStyleTag
+    add_style_tag = out.pop("add_style_tag", None)
+    if add_style_tag is not None:
+        out["addStyleTag"] = add_style_tag
+
+    # reject_resource_types → rejectResourceTypes
+    reject_resource_types = out.pop("reject_resource_types", None)
+    if reject_resource_types is not None:
+        out["rejectResourceTypes"] = reject_resource_types
 
     return out
 
@@ -320,6 +338,42 @@ class CFBrowserDirect:
         return await crawl_wait_poll(
             job_id, self.crawl_status, timeout=timeout, poll_interval=poll_interval
         )
+
+    # ------------------------------------------------------------------
+    # Interaction API stubs (not supported in Direct mode)
+    # ------------------------------------------------------------------
+
+    _INTERACT_MSG = (
+        "Browser interaction requires Worker mode with BROWSER binding. "
+        "Direct mode only supports read-only operations."
+    )
+
+    async def click(self, url: str, selector: str, **opts: Any) -> dict:
+        raise NotImplementedError(self._INTERACT_MSG)
+
+    async def type_text(
+        self, url: str, selector: str, text: str, *, clear: bool = False, **opts: Any
+    ) -> dict:
+        raise NotImplementedError(self._INTERACT_MSG)
+
+    async def evaluate(self, url: str, script: str, **opts: Any) -> dict:
+        raise NotImplementedError(self._INTERACT_MSG)
+
+    async def interact(self, url: str, actions: list[dict], **opts: Any) -> dict:
+        raise NotImplementedError(self._INTERACT_MSG)
+
+    async def submit_form(
+        self,
+        url: str,
+        fields: dict[str, str],
+        *,
+        submit_selector: str | None = None,
+        **opts: Any,
+    ) -> dict:
+        raise NotImplementedError(self._INTERACT_MSG)
+
+    async def delete_crawl(self, job_id: str) -> None:
+        raise NotImplementedError(self._INTERACT_MSG)
 
     # ------------------------------------------------------------------
     # Lifecycle

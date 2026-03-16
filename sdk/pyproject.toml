@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cf-browser"
-version = "1.2.0"
+version = "2.0.0"
 description = "Python SDK for Cloudflare Browser Rendering — read any web page from Python (Worker + Direct mode)"
 readme = "README.md"
 license = "MIT"

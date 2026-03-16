@@ -35,5 +35,11 @@ id = ""  # ← paste your RATE_LIMIT namespace ID
 binding = "STORAGE"
 bucket_name = "cf-browser-storage"
 
+# Browser Rendering binding (Workers Paid plan, $5/mo)
+# Only needed for interaction endpoints (/click, /type, /evaluate, /interact, /submit-form).
+# Read-only endpoints work without it.
+[browser]
+binding = "BROWSER"
+
 [dev]
 port = 8787

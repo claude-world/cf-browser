@@ -15,6 +15,8 @@ import { mapToCfParams } from "../lib/param-map.js";
 const app = new Hono<AppEnv>();
 
 const R2_KEY_PREFIX = "crawl:";
+// UUID format check for job IDs (CF API returns UUIDs)
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // POST /crawl — start crawl job
 app.post("/", async (c) => {
@@ -63,6 +65,10 @@ app.get("/:id", async (c) => {
     return c.json({ error: "Missing job ID", status: 400 }, 400);
   }
 
+  if (!UUID_RE.test(jobId)) {
+    return c.json({ error: "Invalid job ID format", status: 400 }, 400);
+  }
+
   const r2Key = `${R2_KEY_PREFIX}${jobId}`;
 
   // Check R2 for a completed result first
@@ -103,6 +109,22 @@ app.get("/:id", async (c) => {
 
   c.header("X-Cache", "MISS");
   return c.json(statusData);
+});
+
+// DELETE /crawl/:id — delete cached crawl result
+app.delete("/:id", async (c) => {
+  const jobId = c.req.param("id");
+  if (!jobId) {
+    return c.json({ error: "Missing job ID", status: 400 }, 400);
+  }
+
+  if (!UUID_RE.test(jobId)) {
+    return c.json({ error: "Invalid job ID format", status: 400 }, 400);
+  }
+
+  const r2Key = `${R2_KEY_PREFIX}${jobId}`;
+  await c.env.STORAGE.delete(r2Key);
+  return c.body(null, 204);
 });
 
 export default app;

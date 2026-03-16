@@ -7,11 +7,14 @@
  * stripping `no_cache` and endpoint-specific params (e.g. width/height).
  *
  * Mappings:
- *   wait_for   → waitForSelector
- *   headers    → setExtraHTTPHeaders
- *   timeout    → gotoOptions.timeout
- *   wait_until → gotoOptions.waitUntil
- *   user_agent → userAgent
+ *   wait_for              → waitForSelector
+ *   headers               → setExtraHTTPHeaders
+ *   timeout               → gotoOptions.timeout
+ *   wait_until            → gotoOptions.waitUntil
+ *   user_agent            → userAgent
+ *   add_script_tag        → addScriptTag
+ *   add_style_tag         → addStyleTag
+ *   reject_resource_types → rejectResourceTypes
  */
 export function mapToCfParams(
   body: Record<string, unknown>,
@@ -49,6 +52,24 @@ export function mapToCfParams(
   if (out.user_agent !== undefined) {
     out.userAgent = out.user_agent;
     delete out.user_agent;
+  }
+
+  // add_script_tag → addScriptTag
+  if (out.add_script_tag !== undefined) {
+    out.addScriptTag = out.add_script_tag;
+    delete out.add_script_tag;
+  }
+
+  // add_style_tag → addStyleTag
+  if (out.add_style_tag !== undefined) {
+    out.addStyleTag = out.add_style_tag;
+    delete out.add_style_tag;
+  }
+
+  // reject_resource_types → rejectResourceTypes
+  if (out.reject_resource_types !== undefined) {
+    out.rejectResourceTypes = out.reject_resource_types;
+    delete out.reject_resource_types;
   }
 
   return out;

@@ -97,6 +97,10 @@ class CFBrowser:
         _raise_for_status(response)
         return response.json()
 
+    async def _delete(self, path: str) -> None:
+        response = await self._client.delete(f"{self._base_url}{path}")
+        _raise_for_status(response)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -296,6 +300,123 @@ class CFBrowser:
         return await crawl_wait_poll(
             job_id, self.crawl_status, timeout=timeout, poll_interval=poll_interval
         )
+
+    # ------------------------------------------------------------------
+    # Interaction API (requires Worker with BROWSER binding)
+    # ------------------------------------------------------------------
+
+    async def click(self, url: str, selector: str, **opts: Any) -> dict:
+        """Click an element on *url*.
+
+        Parameters
+        ----------
+        selector:
+            CSS selector of the element to click.
+
+        Returns
+        -------
+        dict
+            Page state after click: ``{url, title, content}``.
+        """
+        payload = _build_payload(url, None, {"selector": selector, **opts})
+        return await self._post_json("/click", payload)
+
+    async def type_text(
+        self, url: str, selector: str, text: str, *, clear: bool = False, **opts: Any
+    ) -> dict:
+        """Type text into an input element on *url*.
+
+        Parameters
+        ----------
+        selector:
+            CSS selector of the input element.
+        text:
+            Text to type.
+        clear:
+            When True, clear the field before typing.
+
+        Returns
+        -------
+        dict
+            Page state after typing: ``{url, title, content}``.
+        """
+        extras: dict[str, Any] = {"selector": selector, "text": text, **opts}
+        if clear:
+            extras["clear"] = True
+        payload = _build_payload(url, None, extras)
+        return await self._post_json("/type", payload)
+
+    async def evaluate(self, url: str, script: str, **opts: Any) -> dict:
+        """Execute JavaScript on *url* and return the result.
+
+        Parameters
+        ----------
+        script:
+            JavaScript code to execute in the page context.
+
+        Returns
+        -------
+        dict
+            ``{result, type}`` where *result* is the return value.
+        """
+        payload = _build_payload(url, None, {"script": script, **opts})
+        return await self._post_json("/evaluate", payload)
+
+    async def interact(self, url: str, actions: list[dict], **opts: Any) -> dict:
+        """Execute a chain of browser actions on *url*.
+
+        Parameters
+        ----------
+        actions:
+            List of action objects. Each must have an ``action`` key
+            (navigate, click, type, wait, screenshot, evaluate, select, scroll).
+
+        Returns
+        -------
+        dict
+            ``{url, title, results}`` where *results* is a list of per-action outcomes.
+        """
+        payload = _build_payload(url, None, {"actions": actions, **opts})
+        return await self._post_json("/interact", payload)
+
+    async def submit_form(
+        self,
+        url: str,
+        fields: dict[str, str],
+        *,
+        submit_selector: str | None = None,
+        **opts: Any,
+    ) -> dict:
+        """Fill and submit a form on *url*.
+
+        Parameters
+        ----------
+        fields:
+            Mapping of CSS selector → value for each form field.
+        submit_selector:
+            Optional CSS selector for the submit button. If omitted,
+            submits the first ``<form>`` on the page.
+
+        Returns
+        -------
+        dict
+            Page state after submission: ``{url, title, content}``.
+        """
+        extras: dict[str, Any] = {"fields": fields, **opts}
+        if submit_selector:
+            extras["submit_selector"] = submit_selector
+        payload = _build_payload(url, None, extras)
+        return await self._post_json("/submit-form", payload)
+
+    async def delete_crawl(self, job_id: str) -> None:
+        """Delete a cached crawl result.
+
+        Parameters
+        ----------
+        job_id:
+            The crawl job ID to delete.
+        """
+        await self._delete(f"/crawl/{job_id}")
 
     # ------------------------------------------------------------------
     # Lifecycle

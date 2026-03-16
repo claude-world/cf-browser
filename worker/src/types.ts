@@ -5,6 +5,7 @@ export type Env = {
   CACHE: KVNamespace;
   RATE_LIMIT: KVNamespace;
   STORAGE: R2Bucket;
+  BROWSER?: Fetcher; // optional — only needed for interaction routes
 };
 
 export type Variables = {
@@ -24,15 +25,22 @@ export type CookieParam = {
   sameSite?: "Strict" | "Lax" | "None";
 };
 
+// Script/Style tag injection (CF API format)
+export type ScriptTag = { content?: string; url?: string };
+export type StyleTag = { content?: string; url?: string };
+
 // Base request body all POST routes accept.
 //
 // User-facing params use snake_case; mapToCfParams() translates them
 // to the camelCase equivalents the CF Browser Rendering REST API expects:
-//   wait_for   → waitForSelector
-//   headers    → setExtraHTTPHeaders
-//   timeout    → gotoOptions.timeout
-//   wait_until → gotoOptions.waitUntil
-//   user_agent → userAgent
+//   wait_for             → waitForSelector
+//   headers              → setExtraHTTPHeaders
+//   timeout              → gotoOptions.timeout
+//   wait_until           → gotoOptions.waitUntil
+//   user_agent           → userAgent
+//   add_script_tag       → addScriptTag
+//   add_style_tag        → addStyleTag
+//   reject_resource_types → rejectResourceTypes
 export type BaseRequestBody = {
   url: string;
   no_cache?: boolean;
@@ -42,6 +50,10 @@ export type BaseRequestBody = {
   timeout?: number;                     // → gotoOptions.timeout
   wait_until?: string;                  // → gotoOptions.waitUntil
   user_agent?: string;                  // → userAgent
+  add_script_tag?: ScriptTag[];         // → addScriptTag (inject JS)
+  add_style_tag?: StyleTag[];           // → addStyleTag (inject CSS)
+  reject_resource_types?: string[];     // → rejectResourceTypes (block images, etc.)
+  authenticate?: { username: string; password: string }; // HTTP Basic Auth (pass-through)
 };
 
 // Endpoint-specific option types
@@ -82,6 +94,41 @@ export type CrawlRequestBody = BaseRequestBody & {
 };
 
 export type A11yRequestBody = BaseRequestBody;
+
+// Interaction endpoint types (require BROWSER binding)
+
+export type ClickRequestBody = BaseRequestBody & {
+  selector: string;
+};
+
+export type TypeRequestBody = BaseRequestBody & {
+  selector: string;
+  text: string;
+  clear?: boolean;
+};
+
+export type EvaluateRequestBody = BaseRequestBody & {
+  script: string;
+};
+
+export type SubmitFormRequestBody = BaseRequestBody & {
+  fields: Record<string, string>; // selector → value
+  submit_selector?: string;
+};
+
+export type InteractAction =
+  | { action: "navigate"; url: string }
+  | { action: "click"; selector: string }
+  | { action: "type"; selector: string; text: string; clear?: boolean }
+  | { action: "wait"; selector: string; timeout?: number }
+  | { action: "screenshot" }
+  | { action: "evaluate"; script: string }
+  | { action: "select"; selector: string; value: string }
+  | { action: "scroll"; x?: number; y?: number };
+
+export type InteractRequestBody = BaseRequestBody & {
+  actions: InteractAction[];
+};
 
 // Unified error response
 export type ErrorResponse = {

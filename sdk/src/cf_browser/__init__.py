@@ -33,8 +33,13 @@ from .exceptions import (
     RateLimitError,
 )
 from .models import (
+    ClickResult,
     CrawlJob,
     CrawlResult,
+    EvaluateResult,
+    FormField,
+    InteractAction,
+    InteractResult,
     LinkItem,
     ScrapeResult,
 )
@@ -53,4 +58,9 @@ __all__ = [
     "LinkItem",
     "CrawlJob",
     "CrawlResult",
+    "ClickResult",
+    "EvaluateResult",
+    "InteractAction",
+    "InteractResult",
+    "FormField",
 ]

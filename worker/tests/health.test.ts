@@ -17,7 +17,7 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     const body = await res.json<{ status: string; version: string }>();
     expect(body.status).toBe("ok");
-    expect(body.version).toBe("1.0.0");
+    expect(body.version).toBe("2.0.0");
   });
 
   it("does not require Authorization", async () => {

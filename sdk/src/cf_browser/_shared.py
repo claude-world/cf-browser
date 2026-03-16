@@ -48,4 +48,4 @@ async def crawl_wait_poll(
                 status_code=None,
             )
 
-        await asyncio.sleep(min(poll_interval, deadline - time.monotonic()))
+        await asyncio.sleep(max(0, min(poll_interval, deadline - time.monotonic())))

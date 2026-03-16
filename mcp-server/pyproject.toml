@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cf-browser-mcp"
-version = "1.2.0"
-description = "MCP Server with 10 browser tools for Claude Code — powered by Cloudflare Browser Rendering"
+version = "2.0.0"
+description = "MCP Server with 15 browser tools for Claude Code — powered by Cloudflare Browser Rendering"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -35,6 +35,9 @@ dependencies = [
     "cf-browser>=1.0.0",
     "mcp[cli]>=1.0",
 ]
+
+[project.scripts]
+cf-browser-mcp = "cf_browser_mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/claude-world/cf-browser"

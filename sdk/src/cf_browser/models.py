@@ -41,3 +41,55 @@ class CrawlResult(BaseModel):
     status: str  # "pending" | "running" | "complete" | "failed"
     pages: list[dict] | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Interaction models (require Worker mode with BROWSER binding)
+# ---------------------------------------------------------------------------
+
+
+class ClickResult(BaseModel):
+    """Result from a click operation."""
+
+    url: str
+    title: str
+    content: str
+
+
+class EvaluateResult(BaseModel):
+    """Result from a JavaScript evaluation."""
+
+    result: object | None = None
+    type: str
+
+
+class InteractAction(BaseModel):
+    """A single action in an interaction chain."""
+
+    action: str  # navigate | click | type | wait | screenshot | evaluate | select | scroll
+    url: str | None = None
+    selector: str | None = None
+    text: str | None = None
+    clear: bool | None = None
+    script: str | None = None
+    value: str | None = None
+    x: int | None = None
+    y: int | None = None
+    timeout: int | None = None
+
+
+class InteractResult(BaseModel):
+    """Result from a single action in an interaction chain."""
+
+    action: str
+    ok: bool
+    error: str | None = None
+    result: object | None = None
+    data: str | None = None  # base64 screenshot data
+
+
+class FormField(BaseModel):
+    """A form field mapping: CSS selector → value."""
+
+    selector: str
+    value: str
