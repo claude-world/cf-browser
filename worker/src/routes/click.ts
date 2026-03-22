@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
-import { withBrowser, BrowserBindingUnavailable } from "../lib/puppeteer.js";
+import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
 
 const app = new Hono<AppEnv>();
 
@@ -32,7 +32,7 @@ app.post("/", async (c) => {
   }
 
   try {
-    const result = await withBrowser(c.env, body as any, async ({ page }) => {
+    const result = await withBrowser(c.env, toBaseBody(body), async ({ page }) => {
       await page.click(selector);
 
       // Wait for potential navigation after click (best-effort)

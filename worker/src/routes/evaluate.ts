@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import type { AppEnv } from "../types.js";
+import type { AppEnv, BaseRequestBody } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
-import { withBrowser, BrowserBindingUnavailable } from "../lib/puppeteer.js";
+import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
 
 const MAX_SCRIPT_SIZE = 10 * 1024; // 10 KB
 const EVAL_TIMEOUT = 10_000; // 10 seconds
@@ -35,15 +35,14 @@ app.post("/", async (c) => {
   }
 
   try {
-    const result = await withBrowser(c.env, body as any, async ({ page }) => {
-      // Execute with timeout — close the page to abort if it takes too long
+    const result = await withBrowser(c.env, toBaseBody(body), async ({ page }) => {
+      // Execute with timeout — browser.close() in withBrowser's finally handles cleanup
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const value = await Promise.race([
           page.evaluate(script),
           new Promise((_, reject) => {
-            timer = setTimeout(async () => {
-              try { await page.close(); } catch { /* already closing */ }
+            timer = setTimeout(() => {
               reject(new Error("Script execution timed out"));
             }, EVAL_TIMEOUT);
           }),

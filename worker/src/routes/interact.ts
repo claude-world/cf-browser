@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv, InteractAction } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
-import { withBrowser, BrowserBindingUnavailable } from "../lib/puppeteer.js";
+import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
 
 const MAX_ACTIONS = 20;
 const TOTAL_TIMEOUT = 50_000; // 50 seconds
@@ -55,13 +55,11 @@ app.post("/", async (c) => {
   }
 
   try {
-    const result = await withBrowser(c.env, body as any, async ({ page }) => {
+    const result = await withBrowser(c.env, toBaseBody(body), async ({ page }) => {
       const results: ActionResult[] = [];
       const deadline = Date.now() + TOTAL_TIMEOUT;
-      let stopped = false;
 
-      for (const action of actions) {
-        if (stopped) break;
+      actionLoop: for (const action of actions) {
         if (Date.now() > deadline) {
           results.push({ action: action.action, ok: false, error: "Total execution timeout exceeded" });
           break;
@@ -73,12 +71,11 @@ app.post("/", async (c) => {
               const navCheck = validateUrl(action.url);
               if (!navCheck.valid) {
                 results.push({ action: "navigate", ok: false, error: navCheck.error });
-                stopped = true;
                 break;
               }
               await page.goto(action.url, { waitUntil: "load", timeout: 15_000 });
               results.push({ action: "navigate", ok: true, result: action.url });
-              break;
+              continue;
             }
             case "click": {
               await page.click(action.selector);
@@ -89,7 +86,7 @@ app.post("/", async (c) => {
                 // No navigation — fine
               }
               results.push({ action: "click", ok: true });
-              break;
+              continue;
             }
             case "type": {
               if (action.clear) {
@@ -98,19 +95,19 @@ app.post("/", async (c) => {
               }
               await page.type(action.selector, action.text);
               results.push({ action: "type", ok: true });
-              break;
+              continue;
             }
             case "wait": {
               const remaining = Math.max(100, deadline - Date.now());
               const waitTimeout = Math.min(action.timeout ?? 10_000, remaining);
               await page.waitForSelector(action.selector, { timeout: waitTimeout });
               results.push({ action: "wait", ok: true });
-              break;
+              continue;
             }
             case "screenshot": {
               const buf = await page.screenshot({ encoding: "base64" });
               results.push({ action: "screenshot", ok: true, data: buf as string });
-              break;
+              continue;
             }
             case "evaluate": {
               const remaining = Math.max(1000, deadline - Date.now());
@@ -120,8 +117,7 @@ app.post("/", async (c) => {
                 const evalResult = await Promise.race([
                   page.evaluate(action.script),
                   new Promise((_, reject) => {
-                    evalTimer = setTimeout(async () => {
-                      try { await page.close(); } catch { /* closing */ }
+                    evalTimer = setTimeout(() => {
                       reject(new Error("Script execution timed out"));
                     }, evalTimeout);
                   }),
@@ -130,12 +126,12 @@ app.post("/", async (c) => {
               } finally {
                 if (evalTimer) clearTimeout(evalTimer);
               }
-              break;
+              continue;
             }
             case "select": {
               await page.select(action.selector, action.value);
               results.push({ action: "select", ok: true });
-              break;
+              continue;
             }
             case "scroll": {
               const x = typeof action.x === "number" ? action.x : 0;
@@ -144,22 +140,17 @@ app.post("/", async (c) => {
                 `((dx,dy)=>window.scrollBy(dx,dy))(${JSON.stringify(x)},${JSON.stringify(y)})`
               );
               results.push({ action: "scroll", ok: true });
-              break;
+              continue;
             }
             default: {
-              results.push({
-                action: (action as any).action ?? "unknown",
-                ok: false,
-                error: `Unknown action: ${(action as any).action}`,
-              });
-              stopped = true;
-              break;
+              const name = String((action as any).action ?? "unknown");
+              results.push({ action: name, ok: false, error: `Unknown action: ${name}` });
+              break actionLoop; // unknown action stops processing
             }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Action failed";
           results.push({ action: action.action, ok: false, error: msg });
-          // Stop on first failure
           break;
         }
       }

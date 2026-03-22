@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
-import { withBrowser, BrowserBindingUnavailable } from "../lib/puppeteer.js";
+import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
 
 const app = new Hono<AppEnv>();
 
@@ -42,7 +42,7 @@ app.post("/", async (c) => {
   const clear = body.clear === true;
 
   try {
-    const result = await withBrowser(c.env, body as any, async ({ page }) => {
+    const result = await withBrowser(c.env, toBaseBody(body), async ({ page }) => {
       if (clear) {
         await page.click(selector, { clickCount: 3 });
         await page.keyboard.press("Backspace");

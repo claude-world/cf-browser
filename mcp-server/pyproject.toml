@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cf-browser-mcp"
-version = "2.0.0"
+version = "2.0.1"
 description = "MCP Server with 15 browser tools for Claude Code — powered by Cloudflare Browser Rendering"
 readme = "README.md"
 license = "MIT"

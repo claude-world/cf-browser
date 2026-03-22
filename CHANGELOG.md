@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-03-22
+
+### Security
+
+- **SSRF filter hardened** — block CGNAT range (`100.64.0.0/10`, RFC 6598), NAT64 prefixes (`64:ff9b::/96`, `64:ff9b:1::/48`), IPv6 site-local (`fec0::/10`), and all zero-address variants (`::`, `0:0:0:0:0:0:0:0`, etc.)
+- **`authenticate` field stripped from REST API payloads** — previously passed through silently to CF REST API which ignores it, misleading callers into thinking HTTP Basic Auth was active
+- **Type-safe request body parsing** — new `toBaseBody()` helper eliminates all `body as any` casts in Puppeteer route handlers, preventing untyped field leakage
+
+### Fixed
+
+- **`interact` action loop stop logic** — unknown actions now correctly halt the loop via labeled `break`; previously fell through to next action due to switch/loop `break` ambiguity
+- **`evaluate`/`interact` timeout race** — removed `page.close()` from timeout handlers that raced with `browser.close()` in the `withBrowser` finally block
+- **`screenshot` viewport validation** — added numeric bounds checking for `width` (1–7680) and `height` (1–4320)
+- **MCP Server `_build_kwargs` made keyword-only** — prevents positional argument ordering bugs across 13 call sites
+- **MCP Server atexit cleanup** — simplified to honest single-path `asyncio.run()` with clear documentation that cleanup is best-effort
+- **SDK `_raise_for_status` exception narrowing** — replaced bare `except Exception` with `except ValueError` and added `isinstance(body, dict)` guard to prevent `AttributeError` masking on non-dict JSON responses
+- **SDK `delete_crawl` error message** — Direct mode now correctly states "not yet implemented" instead of incorrectly claiming it requires browser interaction
+- **Removed stale `a11y` comment** from `cf-api.ts`
+
+### Changed
+
+- Worker, SDK, and MCP Server versions synced to 2.0.1
+
 ## [2.0.0] - 2026-03-17
 
 ### Added

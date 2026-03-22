@@ -30,8 +30,11 @@ def _raise_for_status(response: httpx.Response) -> None:
     # Try to extract a message from the response body.
     try:
         body = response.json()
-        message = body.get("error") or body.get("message") or str(body)
-    except Exception:
+        if isinstance(body, dict):
+            message = body.get("error") or body.get("message") or str(body)
+        else:
+            message = str(body)
+    except ValueError:
         message = response.text or f"HTTP {response.status_code}"
 
     status = response.status_code

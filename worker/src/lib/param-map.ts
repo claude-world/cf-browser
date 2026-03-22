@@ -21,6 +21,12 @@ export function mapToCfParams(
 ): Record<string, unknown> {
   const out = { ...body };
 
+  // Strip fields that are only meaningful for Puppeteer routes.
+  // `authenticate` sets HTTP Basic Auth via page.authenticate() — the CF REST
+  // API does not support it and would silently ignore it, misleading callers
+  // into thinking their credentials are being used.
+  delete out.authenticate;
+
   // wait_for → waitForSelector (CF API expects an object, not a plain string)
   if (out.wait_for !== undefined) {
     out.waitForSelector = { selector: out.wait_for };

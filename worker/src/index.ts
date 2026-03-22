@@ -46,7 +46,7 @@ app.use(
 app.get("/health", (c) => {
   return c.json({
     status: "ok",
-    version: "2.0.0",
+    version: "2.0.1",
     capabilities: {
       interact: !!c.env.BROWSER,
     },

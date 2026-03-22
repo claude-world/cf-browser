@@ -12,8 +12,33 @@ import puppeteer, {
   type Page,
   type PuppeteerLifeCycleEvent,
 } from "@cloudflare/puppeteer";
-import type { Env, BaseRequestBody, CookieParam } from "../types.js";
+import type { Env, BaseRequestBody, CookieParam, ScriptTag, StyleTag } from "../types.js";
 import { validateUrl } from "./validate-url.js";
+
+/**
+ * Safely extract known BaseRequestBody fields from a raw JSON object,
+ * eliminating `body as any` casts in route handlers.
+ */
+export function toBaseBody(raw: Record<string, unknown>): BaseRequestBody {
+  if (typeof raw.url !== "string" || !raw.url) {
+    throw new Error("toBaseBody: missing or invalid url field");
+  }
+  const body: BaseRequestBody = { url: raw.url };
+  if (typeof raw.wait_for === "string") body.wait_for = raw.wait_for;
+  if (typeof raw.wait_until === "string") body.wait_until = raw.wait_until;
+  if (typeof raw.user_agent === "string") body.user_agent = raw.user_agent;
+  if (typeof raw.timeout === "number") body.timeout = raw.timeout;
+  if (raw.no_cache === true) body.no_cache = true;
+  if (Array.isArray(raw.cookies)) body.cookies = raw.cookies as CookieParam[];
+  if (raw.headers && typeof raw.headers === "object" && !Array.isArray(raw.headers))
+    body.headers = raw.headers as Record<string, string>;
+  if (raw.authenticate && typeof raw.authenticate === "object")
+    body.authenticate = raw.authenticate as { username: string; password: string };
+  if (Array.isArray(raw.add_script_tag)) body.add_script_tag = raw.add_script_tag as ScriptTag[];
+  if (Array.isArray(raw.add_style_tag)) body.add_style_tag = raw.add_style_tag as StyleTag[];
+  if (Array.isArray(raw.reject_resource_types)) body.reject_resource_types = raw.reject_resource_types as string[];
+  return body;
+}
 
 export class BrowserBindingUnavailable extends Error {
   constructor() {

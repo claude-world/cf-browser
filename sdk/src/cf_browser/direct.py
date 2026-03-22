@@ -373,7 +373,11 @@ class CFBrowserDirect:
         raise NotImplementedError(self._INTERACT_MSG)
 
     async def delete_crawl(self, job_id: str) -> None:
-        raise NotImplementedError(self._INTERACT_MSG)
+        raise NotImplementedError(
+            "delete_crawl is not yet implemented in Direct mode. "
+            "The CF REST API may not expose a crawl deletion endpoint. "
+            "Use Worker mode if you need to manage cached crawl results."
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

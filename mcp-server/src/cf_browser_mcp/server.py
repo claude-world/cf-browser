@@ -66,13 +66,27 @@ def get_client():
 
 
 def _cleanup_client():
-    """Close the browser client on process exit."""
+    """Close the browser client on process exit.
+
+    Uses asyncio.run() for a clean shutdown.  Falls back to
+    loop.run_until_complete() when a loop exists but is stopped (e.g. during
+    interpreter teardown), and suppresses errors in either case — this is
+    best-effort cleanup to avoid leaking httpx connection pools.
+    """
     global _client
-    if _client is not None:
-        try:
-            asyncio.run(_client.close())
-        except Exception:
-            pass
+    if _client is None:
+        return
+    client, _client = _client, None
+    try:
+        asyncio.run(client.close())
+    except RuntimeError:
+        # asyncio.run() raised because a loop is already running (e.g. framework
+        # teardown calling atexit while still inside an async context).
+        # run_until_complete() on a running loop would also raise, so cleanup is
+        # not possible here — accept the connection pool leak rather than crashing.
+        pass
+    except Exception:
+        pass
 
 
 atexit.register(_cleanup_client)
@@ -94,6 +108,7 @@ def _timestamp() -> str:
 
 
 def _build_kwargs(
+    *,
     cookies: str = "",
     headers: str = "",
     wait_for: str = "",
@@ -181,7 +196,7 @@ async def browser_content(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     return await client.content(url, **kwargs)
 
 
@@ -222,7 +237,7 @@ async def browser_screenshot(
         reject_resource_types: Optional JSON array of resource types to block. Example: ["image"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     data: bytes = await client.screenshot(
         url, width=width, height=height, full_page=full_page, **kwargs
     )
@@ -276,7 +291,7 @@ async def browser_pdf(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     if landscape:
         kwargs["landscape"] = True
     data: bytes = await client.pdf(url, format=format, **kwargs)
@@ -326,7 +341,7 @@ async def browser_markdown(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     return await client.markdown(url, **kwargs)
 
 
@@ -367,7 +382,7 @@ async def browser_scrape(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     result = await client.scrape(url, selectors, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -415,7 +430,7 @@ async def browser_json(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     result = await client.json_extract(url, prompt, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -455,7 +470,7 @@ async def browser_links(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     result = await client.links(url, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -580,7 +595,7 @@ async def browser_a11y(
                                Example: ["image","stylesheet"]
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent, add_script_tag, add_style_tag, reject_resource_types)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent, add_script_tag=add_script_tag, add_style_tag=add_style_tag, reject_resource_types=reject_resource_types)
     result = await client.a11y(url, **kwargs)
     return json.dumps(result, ensure_ascii=False)
 
@@ -616,7 +631,7 @@ async def browser_click(
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent)
     try:
         result = await client.click(url, selector, **kwargs)
         return json.dumps(result, ensure_ascii=False)
@@ -659,7 +674,7 @@ async def browser_type(
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent)
     try:
         result = await client.type_text(url, selector, text, clear=clear, **kwargs)
         return json.dumps(result, ensure_ascii=False)
@@ -700,7 +715,7 @@ async def browser_evaluate(
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent)
     try:
         result = await client.evaluate(url, script, **kwargs)
         return json.dumps(result, ensure_ascii=False)
@@ -753,7 +768,7 @@ async def browser_interact(
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent)
 
     try:
         parsed_actions = json.loads(actions)
@@ -806,7 +821,7 @@ async def browser_submit_form(
         headers: Optional JSON object of custom HTTP headers.
     """
     client = get_client()
-    kwargs = _build_kwargs(cookies, headers, wait_for, wait_until, user_agent)
+    kwargs = _build_kwargs(cookies=cookies, headers=headers, wait_for=wait_for, wait_until=wait_until, user_agent=user_agent)
 
     try:
         parsed_fields = json.loads(fields)

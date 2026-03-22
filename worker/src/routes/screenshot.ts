@@ -38,6 +38,20 @@ app.post("/", async (c) => {
     }
   }
 
+  // Validate viewport dimensions
+  if (body.width !== undefined) {
+    const w = Number(body.width);
+    if (!Number.isFinite(w) || w < 1 || w > 7680) {
+      return c.json({ error: "width must be between 1 and 7680", status: 400 }, 400);
+    }
+  }
+  if (body.height !== undefined) {
+    const h = Number(body.height);
+    if (!Number.isFinite(h) || h < 1 || h > 4320) {
+      return c.json({ error: "height must be between 1 and 4320", status: 400 }, 400);
+    }
+  }
+
   const api = new CfBrowserApi(c.env.CF_ACCOUNT_ID, c.env.CF_API_TOKEN);
   const { no_cache: _skip, width, height, full_page, ...cfBody } = body;
 
