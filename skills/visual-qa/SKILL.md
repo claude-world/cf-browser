@@ -10,7 +10,7 @@ Automated visual quality assurance using multi-viewport screenshots.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [setup guide](../../README.md#setup)).
+CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
 
 ## Workflow
 

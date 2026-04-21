@@ -2,7 +2,7 @@
 
 The fastest way to read any website from [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Open-source tool that gives Claude Code **15 MCP tools + 6 ready-to-use Skills** for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility trees, AI-powered data extraction, multi-page crawling, and **browser interaction** (click, type, form submit, JS eval, action chains). Powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier. Supports **Direct Mode** (no Worker needed) and **Worker Mode** (with caching, rate limiting, and interaction).
+Open-source tool that gives Claude Code **15 MCP tools + 6 ready-to-use Skills** for JavaScript-rendered web pages — content extraction, screenshots, PDFs, accessibility snapshots, AI-powered data extraction, multi-page crawling, and **browser interaction** (click, type, form submit, JS eval, action chains). Powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) with zero-cost free tier. Supports **Direct Mode** (no Worker needed) and **Worker Mode** (with caching, rate limiting, and interaction).
 
 [![PyPI - cf-browser](https://img.shields.io/pypi/v/cf-browser?label=cf-browser)](https://pypi.org/project/cf-browser/)
 [![PyPI - cf-browser-mcp](https://img.shields.io/pypi/v/cf-browser-mcp?label=cf-browser-mcp)](https://pypi.org/project/cf-browser-mcp/)
@@ -14,7 +14,7 @@ Open-source tool that gives Claude Code **15 MCP tools + 6 ready-to-use Skills**
 Claude Code's built-in `WebFetch` only returns raw HTML. Single-page apps, dynamic content, and JS-rendered pages come back empty. CF Browser solves this:
 
 - **JS execution** — full headless Chrome renders the page before extraction
-- **15 purpose-built tools** — markdown, screenshots, PDFs, a11y trees, AI extraction, crawling, plus click/type/evaluate/interact/form-submit
+- **15 purpose-built tools** — markdown, screenshots, PDFs, accessibility snapshots, AI extraction, crawling, plus click/type/evaluate/interact/form-submit
 - **Browser interaction** — click buttons, fill forms, execute JS, chain multi-step actions (Worker mode)
 - **Authenticated scraping** — inject cookies and custom headers for logged-in pages
 - **Zero cost** — read-only tools run on Cloudflare's free tier; interaction tools require Workers Paid ($5/mo)
@@ -29,6 +29,7 @@ Two ways to use CF Browser — pick the one that fits:
 | **Setup** | `pip install` + 2 env vars | Deploy Worker + `pip install` |
 | **Time to start** | 2 minutes | 10 minutes |
 | **Requirements** | CF Account ID + API Token | Worker + KV + R2 |
+| **Available tools** | 10 read-only tools | All 15 tools |
 | **Caching** | None | KV + R2 (saves ~70% API quota) |
 | **Rate limiting** | None | 60 req/min per key |
 | **Multi-user** | No (shares your CF credentials) | Yes (each user gets own API key) |
@@ -64,7 +65,7 @@ Get your credentials:
 - **Account ID**: `wrangler whoami` or [Cloudflare Dashboard](https://dash.cloudflare.com) → any domain → Overview → right sidebar
 - **API Token**: [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) → Create Token → use "Edit Cloudflare Workers" template
 
-Restart Claude Code. Done.
+Restart Claude Code. The 10 read-only tools work immediately; the 5 interaction tools require Worker Mode.
 
 ### Option B: Worker Mode (with caching & rate limiting)
 
@@ -207,11 +208,11 @@ Three independent packages:
 | `browser_content` | url | HTML string | Get fully rendered HTML (JS executed) |
 | `browser_screenshot` | url, width, height | PNG file path | Visual verification, multi-device testing |
 | `browser_pdf` | url, format | PDF file path | Generate reports, archive pages |
-| `browser_scrape` | url, selectors[] | JSON | Extract specific elements by CSS selector |
+| `browser_scrape` | url, selectors[] | `{"elements":[...]}` | Extract selector matches with normalized metadata |
 | `browser_json` | url, prompt | JSON | AI-powered structured data extraction |
-| `browser_links` | url | JSON array | Discover all hyperlinks on a page |
-| `browser_a11y` | url | JSON | Accessibility tree — LLM-friendly structured data |
-| `browser_crawl` | url, limit | Job ID | Start async multi-page crawl |
+| `browser_links` | url | `[{href, text}]` | Discover all hyperlinks on a page |
+| `browser_a11y` | url | JSON | Accessibility-oriented snapshot with screenshot stripped |
+| `browser_crawl` | url, limit | `{"job_id","status"}` | Start async multi-page crawl |
 | `browser_crawl_status` | job_id, wait | JSON | Poll or wait for crawl results |
 
 ### Interaction tools (Worker mode only — requires BROWSER binding)
@@ -270,16 +271,16 @@ All routes (except `/health`) require `Authorization: Bearer <api-key>` header.
 
 | Route | Method | Body | Cache | Response |
 |-------|--------|------|-------|----------|
-| `/health` | GET | — | — | `{"status":"ok","version":"2.0.0","capabilities":{...}}` |
+| `/health` | GET | — | — | `{"status":"ok","version":"2.0.1","capabilities":{"interact":...}}` |
 | `/content` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | HTML |
 | `/markdown` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | Markdown |
 | `/screenshot` | POST | `{url, width?, height?, full_page?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PNG |
 | `/pdf` | POST | `{url, format?, landscape?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PDF |
 | `/snapshot` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
-| `/scrape` | POST | `{url, elements[], wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
+| `/scrape` | POST | `{url, elements[], wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | `{"elements":[...]}` |
 | `/json` | POST | `{url, prompt, schema?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | None | JSON |
-| `/links` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | JSON |
-| `/a11y` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 5min | JSON |
+| `/links` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | `[{href, text}]` |
+| `/a11y` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 5min | `{"type":"accessibility_snapshot", ...}` |
 | `/crawl` | POST | `{url, limit?, user_agent?, cookies?, headers?, no_cache?}` | — | `{"job_id":"..."}` |
 | `/crawl/:id` | GET | — | R2 | JSON |
 | `/crawl/:id` | DELETE | — | — | 204 No Content |
@@ -289,7 +290,13 @@ All routes (except `/health`) require `Authorization: Bearer <api-key>` header.
 | `/interact` | POST | `{url, actions[], wait_for?, ...}` | None | JSON |
 | `/submit-form` | POST | `{url, fields, submit_selector?, wait_for?, ...}` | None | JSON |
 
-Interaction routes (`/click`, `/type`, `/evaluate`, `/interact`, `/submit-form`) require the `BROWSER` binding. They return 501 if the binding is not configured.
+Interaction routes (`/click`, `/type`, `/evaluate`, `/interact`, `/submit-form`) require the `BROWSER` binding. They return 501 if the binding is not configured. If these routes return 404 instead, the Worker deployment is stale; redeploy and verify `/health` reports `version: "2.0.1"`.
+
+Response shapes are normalized across Worker, SDK, and MCP:
+
+- `/scrape` returns `{"elements":[{"selector":"...", "results":[...]}]}` even if the upstream API returns a raw list.
+- `/links` returns an array of `{href, text}` objects; bare URL strings are promoted to `{href, text: null}`.
+- `/a11y` is derived from `/snapshot`, strips base64 screenshot payloads, and adds `type: "accessibility_snapshot"`.
 
 ### Authenticated requests
 
@@ -322,7 +329,7 @@ curl -X POST https://cf-browser.example.workers.dev/screenshot \
   -d '{"url": "https://example.com", "width": 1280, "height": 720}' \
   -o screenshot.png
 
-# Accessibility tree
+# Accessibility snapshot
 curl -X POST https://cf-browser.example.workers.dev/a11y \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
@@ -384,7 +391,7 @@ async with CFBrowser(
         prompt="Extract the top 5 stories with title and score",
     )
 
-    # Accessibility tree (LLM-friendly, lower token cost)
+    # Accessibility snapshot (LLM-friendly, screenshot stripped)
     tree = await browser.a11y("https://example.com")
 
     # Scrape by CSS selectors
@@ -414,8 +421,8 @@ async with CFBrowser(
 | `snapshot(url, **opts)` | `dict` | HTML + metadata |
 | `scrape(url, selectors, **opts)` | `dict` | Normalized as `{"elements": [...]}` |
 | `json_extract(url, prompt, **opts)` | `dict` | AI-extracted data |
-| `links(url, **opts)` | `list[dict]` | All hyperlinks |
-| `a11y(url, **opts)` | `dict` | Accessibility tree |
+| `links(url, **opts)` | `list[dict]` | Normalized list of `{href, text}` objects |
+| `a11y(url, **opts)` | `dict` | Accessibility-oriented snapshot with screenshot stripped |
 | `crawl(url, **opts)` | `str` | Job ID |
 | `crawl_status(job_id)` | `dict` | Job status |
 | `crawl_wait(job_id, timeout, poll_interval)` | `dict` | Wait for completion |
@@ -431,7 +438,7 @@ async with CFBrowser(
 | `submit_form(url, fields, submit_selector?, **opts)` | `dict` | Fill and submit form |
 | `delete_crawl(job_id)` | `None` | Delete cached crawl result |
 
-All methods accept `no_cache=True` to bypass caching, `cookies`/`headers` for authenticated access, `wait_for` to wait for a CSS selector, `wait_until` for navigation strategy (`networkidle0` for SPAs), and `user_agent` for custom User-Agent. Interaction methods raise `NotImplementedError` in Direct mode.
+All methods accept `no_cache=True` to bypass caching, `cookies`/`headers` for authenticated access, `wait_for` to wait for a CSS selector, `wait_until` for navigation strategy (`networkidle0` for SPAs), and `user_agent` for custom User-Agent. Interaction methods raise `NotImplementedError` in Direct mode. In Worker mode, `404 Not Found` on interaction methods usually means you are pointing at a stale Worker deployment and should redeploy.
 
 ## Security
 
@@ -473,6 +480,12 @@ cp -r skills/* .claude/skills/
 
 For most Claude Code usage, the free tier is sufficient. Interaction tools (click, type, evaluate, interact, submit-form) require the Workers Paid plan ($5/mo) for the BROWSER binding.
 
+## Troubleshooting
+
+- `browser_click` / `browser_type` / `browser_evaluate` / `browser_interact` / `browser_submit_form` return `501`: the Worker is deployed without `[browser] binding = "BROWSER"`.
+- Those same tools return `404`: the Worker deployment is older than the current repo. Redeploy and verify `/health` returns `version: "2.0.1"`.
+- `browser_scrape` or `browser_links` look different between environments: current SDK and MCP normalize legacy upstream shapes, but the cleanest fix is still to redeploy the Worker.
+
 ## Development
 
 ### Worker
@@ -501,6 +514,7 @@ cd mcp-server
 python -m venv .venv && source .venv/bin/activate
 pip install -e ../sdk     # Install SDK first
 pip install -e ".[dev]"
+pytest tests/ -v
 ```
 
 ## Project Structure
@@ -524,7 +538,7 @@ cf-browser/
 │   │   │   ├── scrape.ts    POST /scrape → JSON
 │   │   │   ├── json.ts      POST /json → JSON (AI)
 │   │   │   ├── links.ts     POST /links → JSON
-│   │   │   ├── a11y.ts      POST /a11y → JSON (accessibility tree)
+│   │   │   ├── a11y.ts      POST /a11y → JSON (accessibility snapshot)
 │   │   │   ├── crawl.ts     POST/GET/DELETE /crawl
 │   │   │   ├── click.ts     POST /click (interaction)
 │   │   │   ├── type.ts      POST /type (interaction)
@@ -535,6 +549,7 @@ cf-browser/
 │   │       ├── cf-api.ts    CF Browser Rendering client
 │   │       ├── puppeteer.ts Puppeteer lifecycle helper (interaction)
 │   │       ├── param-map.ts snake_case → CF API camelCase mapping
+│   │       ├── response-normalizers.ts scrape/links response normalization
 │   │       ├── cache-key.ts SHA-256 cache keys
 │   │       └── validate-url.ts  SSRF prevention
 │   ├── tests/
@@ -544,6 +559,7 @@ cf-browser/
 │   ├── src/cf_browser/
 │   │   ├── client.py        CFBrowser client (Worker mode)
 │   │   ├── direct.py        CFBrowserDirect client (Direct mode)
+│   │   ├── _normalizers.py  Response-shape normalization helpers
 │   │   ├── _shared.py       Shared helpers (crawl polling)
 │   │   ├── models.py        Pydantic response models
 │   │   └── exceptions.py    Typed error hierarchy
@@ -565,7 +581,7 @@ cf-browser/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
-4. Run `npm test` (worker) and `pytest` (SDK) to verify
+4. Run `npm test` (worker) and `pytest` (SDK + MCP Server) to verify
 5. Submit a pull request
 
 ## License

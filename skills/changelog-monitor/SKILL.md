@@ -10,7 +10,7 @@ Track releases, changelogs, and breaking changes from any software project's web
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [setup guide](../../README.md#setup)).
+CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
 
 ## Why This Skill?
 

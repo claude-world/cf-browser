@@ -10,7 +10,7 @@ Extract and compare structured data from multiple websites side-by-side.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [setup guide](../../README.md#setup)).
+CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
 
 ## Why This Skill?
 

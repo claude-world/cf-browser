@@ -10,7 +10,7 @@ Fetch and convert external documentation to local markdown files for use as cont
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [setup guide](../../README.md#setup)).
+CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
 
 ## Workflow
 

@@ -10,7 +10,7 @@ Comprehensive website audit for SEO, broken links, and accessibility.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [setup guide](../../README.md#setup)).
+CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
 
 ## Workflow
 
@@ -49,7 +49,7 @@ Using `browser_links` on 3-5 key pages (homepage, major sections):
 - Cross-reference with crawl results to find orphan pages
 - Identify links pointing to 4xx/5xx pages found in Step 2
 
-### Step 4: Generate Report
+### Step 5: Generate Report
 
 Output a markdown report with sections:
 

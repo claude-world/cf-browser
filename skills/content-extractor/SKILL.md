@@ -10,7 +10,7 @@ Extract content from JavaScript-rendered web pages using CF Browser MCP tools.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [setup guide](../../README.md#setup)).
+CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
 
 ## Modes
 

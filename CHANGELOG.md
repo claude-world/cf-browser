@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **DNS-based SSRF validation** — Worker URL validation now blocks hostnames that resolve to private IPs, not just literal localhost / RFC1918-style addresses.
+- **Production dependency refresh** — Worker dependencies upgraded to `@cloudflare/puppeteer@1.1.0` and `hono@4.12.14`, clearing published `npm audit --omit=dev` vulnerabilities.
+
+### Fixed
+
+- **`submit-form` fallback behavior** — Worker now prefers `requestSubmit()` or a real submit control instead of raw `form.submit()`, preserving validation and submit handlers.
+- **Interaction navigation races** — `click`, `interact`, and `submit-form` now start navigation waits before the action, eliminating missed navigations on fast pages.
+- **`scrape` / `links` contract drift** — Worker, SDK, and MCP now normalize upstream response shapes to the documented `{"elements":[...]}` and `[{href, text}]` formats.
+- **Stale Worker interaction errors** — MCP interaction tools now distinguish "Direct mode unsupported" from "deployed Worker is missing routes" and return a redeploy hint for 404s.
+
+### Added
+
+- **Worker regression tests** — new coverage for interaction routes and DNS-based URL validation.
+
+### Documentation
+
+- Root README, localized README, package READMEs, contributing guide, and skills links updated to match the current 2.0.1 behavior and setup flow.
+
 ## [2.0.1] - 2026-03-22
 
 ### Security
