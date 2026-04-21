@@ -177,12 +177,13 @@ async def test_scrape_transforms_selectors(client):
     with respx.mock:
         route = respx.post(f"{CF_BASE}/scrape").mock(
             return_value=httpx.Response(
-                200, json={"success": True, "result": {"elements": []}}
+                200, json={"success": True, "result": [{"selector": "h1", "results": []}]}
             )
         )
-        await client.scrape("https://example.com", selectors=["h1", "p"])
+        result = await client.scrape("https://example.com", selectors=["h1", "p"])
     sent = json.loads(route.calls[0].request.content)
     assert sent["elements"] == [{"selector": "h1"}, {"selector": "p"}]
+    assert result["elements"][0]["selector"] == "h1"
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +209,7 @@ async def test_json_extract_returns_dict(client):
 
 @pytest.mark.asyncio
 async def test_links_returns_list(client):
-    payload = {"success": True, "result": [{"href": "https://a.com"}]}
+    payload = {"success": True, "result": ["https://a.com"]}
     with respx.mock:
         respx.post(f"{CF_BASE}/links").mock(
             return_value=httpx.Response(200, json=payload)
@@ -216,6 +217,7 @@ async def test_links_returns_list(client):
         result = await client.links("https://example.com")
     assert isinstance(result, list)
     assert result[0]["href"] == "https://a.com"
+    assert result[0]["text"] is None
 
 
 # ---------------------------------------------------------------------------

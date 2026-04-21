@@ -48,7 +48,7 @@ async with CFBrowser(
 | `screenshot(url)` | `bytes` | PNG image |
 | `pdf(url)` | `bytes` | PDF document |
 | `snapshot(url)` | `dict` | HTML + metadata |
-| `scrape(url, selectors)` | `dict` | Elements by CSS selector |
+| `scrape(url, selectors)` | `dict` | Normalized as `{"elements": [...]}` |
 | `json_extract(url, prompt)` | `dict` | AI-extracted data |
 | `links(url)` | `list[dict]` | All hyperlinks |
 | `a11y(url)` | `dict` | Accessibility tree |

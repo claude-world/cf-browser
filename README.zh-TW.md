@@ -384,7 +384,7 @@ async with CFBrowser(
 | `screenshot(url, **opts)` | `bytes` | PNG 圖片 |
 | `pdf(url, **opts)` | `bytes` | PDF 文件 |
 | `snapshot(url, **opts)` | `dict` | HTML + 中繼資料 |
-| `scrape(url, selectors, **opts)` | `dict` | 依選擇器擷取的元素 |
+| `scrape(url, selectors, **opts)` | `dict` | 正規化為 `{"elements": [...]}` |
 | `json_extract(url, prompt, **opts)` | `dict` | AI 擷取的資料 |
 | `links(url, **opts)` | `list[dict]` | 所有超連結 |
 | `a11y(url, **opts)` | `dict` | 無障礙樹 |

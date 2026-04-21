@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from cf_browser.exceptions import CFBrowserError
+from cf_browser.exceptions import CFBrowserError, NotFoundError
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("cf-browser")
@@ -157,6 +157,32 @@ def _build_kwargs(
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid reject_resource_types JSON: {e}") from e
     return kwargs
+
+
+def _interaction_error_payload(err: Exception) -> str:
+    """Return a user-facing JSON error for interaction-only tools."""
+    if isinstance(err, NotImplementedError):
+        return json.dumps(
+            {
+                "error": str(err),
+                "hint": "Use Worker mode with BROWSER binding",
+            },
+            ensure_ascii=False,
+        )
+
+    if isinstance(err, NotFoundError):
+        return json.dumps(
+            {
+                "error": str(err),
+                "hint": (
+                    "The deployed Worker is missing interaction routes. "
+                    "Redeploy the Worker from this repo and ensure the BROWSER binding is enabled."
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    raise err
 
 
 # ---------------------------------------------------------------------------
@@ -635,8 +661,8 @@ async def browser_click(
     try:
         result = await client.click(url, selector, **kwargs)
         return json.dumps(result, ensure_ascii=False)
-    except NotImplementedError as e:
-        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+    except (NotImplementedError, NotFoundError) as e:
+        return _interaction_error_payload(e)
 
 
 # ---------------------------------------------------------------------------
@@ -678,8 +704,8 @@ async def browser_type(
     try:
         result = await client.type_text(url, selector, text, clear=clear, **kwargs)
         return json.dumps(result, ensure_ascii=False)
-    except NotImplementedError as e:
-        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+    except (NotImplementedError, NotFoundError) as e:
+        return _interaction_error_payload(e)
 
 
 # ---------------------------------------------------------------------------
@@ -719,8 +745,8 @@ async def browser_evaluate(
     try:
         result = await client.evaluate(url, script, **kwargs)
         return json.dumps(result, ensure_ascii=False)
-    except NotImplementedError as e:
-        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+    except (NotImplementedError, NotFoundError) as e:
+        return _interaction_error_payload(e)
 
 
 # ---------------------------------------------------------------------------
@@ -781,8 +807,8 @@ async def browser_interact(
     try:
         result = await client.interact(url, parsed_actions, **kwargs)
         return json.dumps(result, ensure_ascii=False)
-    except NotImplementedError as e:
-        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+    except (NotImplementedError, NotFoundError) as e:
+        return _interaction_error_payload(e)
 
 
 # ---------------------------------------------------------------------------
@@ -839,8 +865,8 @@ async def browser_submit_form(
             **kwargs,
         )
         return json.dumps(result, ensure_ascii=False)
-    except NotImplementedError as e:
-        return json.dumps({"error": str(e), "hint": "Use Worker mode with BROWSER binding"}, ensure_ascii=False)
+    except (NotImplementedError, NotFoundError) as e:
+        return _interaction_error_payload(e)
 
 
 # ---------------------------------------------------------------------------

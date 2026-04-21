@@ -10,10 +10,12 @@
 import puppeteer, {
   type Browser,
   type Page,
-  type PuppeteerLifeCycleEvent,
+  type HTTPRequest,
 } from "@cloudflare/puppeteer";
 import type { Env, BaseRequestBody, CookieParam, ScriptTag, StyleTag } from "../types.js";
-import { validateUrl } from "./validate-url.js";
+import { validateUrlWithDns } from "./validate-url.js";
+
+type NavigationWaitUntil = "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 
 /**
  * Safely extract known BaseRequestBody fields from a raw JSON object,
@@ -54,6 +56,30 @@ type BrowserContext = {
   page: Page;
   browser: Browser;
 };
+
+export async function performActionAndWaitForNavigation<T>(
+  page: Page,
+  action: () => Promise<T>,
+  timeout: number,
+): Promise<T> {
+  const navigation = page.waitForNavigation({ timeout }).catch(() => null);
+  const result = await action();
+  await navigation;
+  return result;
+}
+
+async function handleInterceptedRequest(
+  req: HTTPRequest,
+  dnsCache: Map<string, Promise<string[]>>,
+): Promise<void> {
+  const check = await validateUrlWithDns(req.url(), dnsCache);
+  if (!check.valid) {
+    await req.abort("blockedbyclient");
+    return;
+  }
+
+  await req.continue();
+}
 
 /**
  * Open a browser, navigate to `body.url`, and execute `callback`.
@@ -106,18 +132,20 @@ export async function withBrowser<T>(
     }
 
     // SSRF protection: intercept requests to block redirects to private IPs
+    const dnsCache = new Map<string, Promise<string[]>>();
     await page.setRequestInterception(true);
     page.on("request", (req) => {
-      const check = validateUrl(req.url());
-      if (!check.valid) {
-        req.abort("blockedbyclient");
-      } else {
-        req.continue();
-      }
+      void handleInterceptedRequest(req, dnsCache).catch(async () => {
+        try {
+          await req.abort("blockedbyclient");
+        } catch {
+          // Request may already be handled by the time we get here.
+        }
+      });
     });
 
     // Navigate
-    const waitUntil = (body.wait_until as PuppeteerLifeCycleEvent) ?? "load";
+    const waitUntil = (body.wait_until as NavigationWaitUntil) ?? "load";
     const timeout = body.timeout ?? 30_000;
     await page.goto(body.url, { waitUntil, timeout });
 

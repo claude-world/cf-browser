@@ -412,7 +412,7 @@ async with CFBrowser(
 | `screenshot(url, **opts)` | `bytes` | PNG image |
 | `pdf(url, **opts)` | `bytes` | PDF document |
 | `snapshot(url, **opts)` | `dict` | HTML + metadata |
-| `scrape(url, selectors, **opts)` | `dict` | Elements by selector |
+| `scrape(url, selectors, **opts)` | `dict` | Normalized as `{"elements": [...]}` |
 | `json_extract(url, prompt, **opts)` | `dict` | AI-extracted data |
 | `links(url, **opts)` | `list[dict]` | All hyperlinks |
 | `a11y(url, **opts)` | `dict` | Accessibility tree |
@@ -437,7 +437,7 @@ All methods accept `no_cache=True` to bypass caching, `cookies`/`headers` for au
 
 - **Auth**: Timing-safe Bearer token comparison using SHA-256 (prevents timing attacks)
 - **Rate limiting**: Per-key tracking with hashed key material in KV (no raw keys stored)
-- **SSRF prevention**: Only `http://` and `https://` URLs allowed; localhost and private IP ranges blocked
+- **SSRF prevention**: Only `http://` and `https://` URLs allowed; localhost, private IP literals, and hostnames that DNS-resolve to private IPs are blocked
 - **Secrets**: All credentials stored via `wrangler secret put`, never in code
 - **Cookie isolation**: Cookies are injected per-request, never persisted
 

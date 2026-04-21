@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
-import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
+import {
+  withBrowser,
+  BrowserBindingUnavailable,
+  performActionAndWaitForNavigation,
+  toBaseBody,
+} from "../lib/puppeteer.js";
 
 const app = new Hono<AppEnv>();
 
@@ -65,19 +70,45 @@ app.post("/", async (c) => {
 
       // Submit
       if (submitSelector) {
-        await page.click(submitSelector);
+        await performActionAndWaitForNavigation(page, () => page.click(submitSelector), 10_000);
       } else {
-        // Try to submit the first form on the page
-        await page.evaluate(
-          `(() => { const form = document.querySelector("form"); if (form) form.submit(); })()`
-        );
-      }
+        const submission = await performActionAndWaitForNavigation(
+          page,
+          () =>
+            page.evaluate(
+              `(() => {
+                const form = document.querySelector("form");
+                if (!(form instanceof HTMLFormElement)) {
+                  return { ok: false, error: "No form found on page" };
+                }
 
-      // Wait for navigation after submit
-      try {
-        await page.waitForNavigation({ timeout: 10_000 });
-      } catch {
-        // May not navigate — that's fine
+                if (typeof form.requestSubmit === "function") {
+                  form.requestSubmit();
+                  return { ok: true, method: "requestSubmit" };
+                }
+
+                const submitter = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+                if (submitter instanceof HTMLElement) {
+                  submitter.click();
+                  return { ok: true, method: "click" };
+                }
+
+                return { ok: false, error: "Form submission requires a submit control" };
+              })()`
+            ),
+          10_000,
+        );
+
+        if (!submission || typeof submission !== "object" || (submission as { ok?: boolean }).ok !== true) {
+          const message =
+            typeof submission === "object" &&
+            submission !== null &&
+            "error" in submission &&
+            typeof submission.error === "string"
+              ? submission.error
+              : "Form submission failed";
+          throw new Error(message);
+        }
       }
 
       const url = page.url();

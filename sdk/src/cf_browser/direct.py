@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from ._normalizers import normalize_links_response, normalize_scrape_response
 from .exceptions import (
     AuthenticationError,
     CFBrowserError,
@@ -275,11 +276,11 @@ class CFBrowserDirect:
         *,
         no_cache: bool = False,
         **opts: Any,
-    ) -> dict:
+    ) -> dict[str, Any]:
         payload = self._strip_no_cache({"url": url, "elements": selectors, **opts})
         payload = _transform_common_opts(payload)
         payload = _transform_scrape_opts(payload)
-        return await self._post_json("/scrape", payload)
+        return normalize_scrape_response(await self._post_json("/scrape", payload))
 
     async def json_extract(
         self,
@@ -293,10 +294,16 @@ class CFBrowserDirect:
         payload = _transform_common_opts(payload)
         return await self._post_json("/json", payload)
 
-    async def links(self, url: str, *, no_cache: bool = False, **opts: Any) -> list[dict]:
+    async def links(
+        self,
+        url: str,
+        *,
+        no_cache: bool = False,
+        **opts: Any,
+    ) -> list[dict[str, Any]]:
         payload = self._strip_no_cache({"url": url, **opts})
         payload = _transform_common_opts(payload)
-        return await self._post_json("/links", payload)
+        return normalize_links_response(await self._post_json("/links", payload))
 
     async def a11y(self, url: str, *, no_cache: bool = False, **opts: Any) -> dict:
         """Accessibility tree via /snapshot with screenshot data stripped."""

@@ -7,6 +7,8 @@
  * Docs: https://developers.cloudflare.com/browser-rendering/rest-api/
  */
 
+import { validateUrlWithDns } from "./validate-url.js";
+
 export type CfApiResponse<T> =
   | { ok: true; data: T; contentType: string }
   | { ok: false; status: number; message: string };
@@ -33,6 +35,13 @@ export class CfBrowserApi {
     body?: Record<string, unknown>
   ): Promise<CfApiResponse<T>> {
     try {
+      if (body && typeof body.url === "string") {
+        const urlCheck = await validateUrlWithDns(body.url);
+        if (!urlCheck.valid) {
+          return { ok: false, status: 400, message: urlCheck.error };
+        }
+      }
+
       const res = await fetch(`${this.baseUrl}${endpoint}`, {
         method,
         headers: this.headers(),

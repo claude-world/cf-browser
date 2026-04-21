@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from ._normalizers import normalize_links_response, normalize_scrape_response
 from .exceptions import (
     AuthenticationError,
     CFBrowserError,
@@ -170,7 +171,7 @@ class CFBrowser:
         *,
         no_cache: bool = False,
         **opts: Any,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Scrape specific CSS *selectors* from *url*.
 
         Parameters
@@ -181,10 +182,10 @@ class CFBrowser:
         Returns
         -------
         dict
-            Parsed elements keyed by selector.
+            Normalized as ``{"elements": [...]}``.
         """
         payload = _build_payload(url, no_cache, {"elements": selectors, **opts})
-        return await self._post_json("/scrape", payload)
+        return normalize_scrape_response(await self._post_json("/scrape", payload))
 
     async def json_extract(
         self,
@@ -209,7 +210,13 @@ class CFBrowser:
         payload = _build_payload(url, no_cache, {"prompt": prompt, **opts})
         return await self._post_json("/json", payload)
 
-    async def links(self, url: str, *, no_cache: bool = False, **opts: Any) -> list[dict]:
+    async def links(
+        self,
+        url: str,
+        *,
+        no_cache: bool = False,
+        **opts: Any,
+    ) -> list[dict[str, Any]]:
         """Extract all hyperlinks from *url*.
 
         Returns
@@ -218,7 +225,7 @@ class CFBrowser:
             Each item has at minimum ``href`` and optionally ``text``.
         """
         payload = _build_payload(url, no_cache, opts)
-        return await self._post_json("/links", payload)
+        return normalize_links_response(await self._post_json("/links", payload))
 
     async def a11y(self, url: str, *, no_cache: bool = False, **opts: Any) -> dict:
         """Get the accessibility tree of *url*.

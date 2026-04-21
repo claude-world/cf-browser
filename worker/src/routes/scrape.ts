@@ -3,6 +3,7 @@ import type { AppEnv } from "../types.js";
 import { CfBrowserApi } from "../lib/cf-api.js";
 import { validateUrl } from "../lib/validate-url.js";
 import { mapToCfParams } from "../lib/param-map.js";
+import { normalizeScrapeResponse } from "../lib/response-normalizers.js";
 import { getCached, setCached, buildCacheKey } from "../middleware/cache.js";
 
 const TTL = 60 * 30; // 30 minutes
@@ -55,11 +56,13 @@ app.post("/", async (c) => {
     return c.json({ error: result.message, status: result.status }, result.status as 502);
   }
 
+  const normalized = normalizeScrapeResponse(result.data);
+
   if (!noCache) {
     await setCached(
       c,
       cacheKey,
-      JSON.stringify(result.data),
+      JSON.stringify(normalized),
       "application/json",
       TTL,
       "kv"
@@ -67,7 +70,7 @@ app.post("/", async (c) => {
   }
 
   c.header("X-Cache", "MISS");
-  return c.json(result.data);
+  return c.json(normalized);
 });
 
 export default app;

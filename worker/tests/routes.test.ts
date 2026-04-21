@@ -94,9 +94,42 @@ async function postJson(path: string, body: unknown, env: Env) {
 // ---------------------------------------------------------------------------
 
 let fetchMock: ReturnType<typeof vi.fn>;
+let cfResponses: Response[];
+
+function dnsSuccessResponse(ip = "93.184.216.34") {
+  return new Response(
+    JSON.stringify({
+      Status: 0,
+      Answer: [{ data: ip }],
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/dns-json" },
+    }
+  );
+}
 
 beforeEach(() => {
-  fetchMock = vi.fn();
+  cfResponses = [];
+  fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url.startsWith("https://cloudflare-dns.com/dns-query")) {
+      return dnsSuccessResponse();
+    }
+
+    const response = cfResponses.shift();
+    if (!response) {
+      throw new Error(`Unexpected fetch request: ${url}`);
+    }
+
+    return response;
+  });
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -105,13 +138,13 @@ afterEach(() => {
 });
 
 function mockCfText(body: string, contentType = "text/html") {
-  fetchMock.mockResolvedValueOnce(
+  cfResponses.push(
     new Response(body, { status: 200, headers: { "Content-Type": contentType } })
   );
 }
 
 function mockCfJson(data: unknown) {
-  fetchMock.mockResolvedValueOnce(
+  cfResponses.push(
     new Response(JSON.stringify(data), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -120,13 +153,25 @@ function mockCfJson(data: unknown) {
 }
 
 function mockCfBinary(buffer: ArrayBuffer, contentType: string) {
-  fetchMock.mockResolvedValueOnce(
+  cfResponses.push(
     new Response(buffer, { status: 200, headers: { "Content-Type": contentType } })
   );
 }
 
 function mockCfError(status: number, message: string) {
-  fetchMock.mockResolvedValueOnce(new Response(message, { status }));
+  cfResponses.push(new Response(message, { status }));
+}
+
+function cfApiCalls() {
+  return fetchMock.mock.calls.filter(([input]) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    return !url.startsWith("https://cloudflare-dns.com/dns-query");
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +203,7 @@ describe("POST /content", () => {
     // Second call — should hit cache, no fetch needed
     const res = await postJson("/content", { url: "https://example.com" }, env);
     expect(res.headers.get("X-Cache")).toBe("HIT");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cfApiCalls()).toHaveLength(1);
   });
 
   it("skips cache when no_cache is true", async () => {
@@ -168,7 +213,7 @@ describe("POST /content", () => {
     await postJson("/content", { url: "https://example.com", no_cache: true }, env);
     const res = await postJson("/content", { url: "https://example.com", no_cache: true }, env);
     expect(res.headers.get("X-Cache")).toBe("MISS");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cfApiCalls()).toHaveLength(2);
   });
 
   it("forwards CF API errors", async () => {
@@ -253,15 +298,17 @@ describe("POST /snapshot", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /scrape", () => {
-  it("returns scraped data", async () => {
+  it("normalizes selector results into an elements envelope", async () => {
     const env = buildEnv();
-    mockCfJson({ elements: [{ selector: "h1", text: "Title" }] });
+    mockCfJson([{ selector: "h1", results: [{ text: "Title" }] }]);
     const res = await postJson(
       "/scrape",
       { url: "https://example.com", elements: ["h1"] },
       env
     );
     expect(res.status).toBe(200);
+    const body = await res.json<{ elements: Array<{ selector: string }> }>();
+    expect(body.elements[0]?.selector).toBe("h1");
   });
 });
 
@@ -277,7 +324,7 @@ describe("POST /json", () => {
     await postJson("/json", { url: "https://example.com" }, env);
     const res = await postJson("/json", { url: "https://example.com" }, env);
     // Should have called CF API twice (no caching)
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cfApiCalls()).toHaveLength(2);
     expect(res.headers.get("X-Cache")).toBe("BYPASS");
   });
 });
@@ -287,11 +334,16 @@ describe("POST /json", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /links", () => {
-  it("returns links array", async () => {
+  it("normalizes links into href/text objects", async () => {
     const env = buildEnv();
-    mockCfJson({ links: ["https://example.com/a", "https://example.com/b"] });
+    mockCfJson(["https://example.com/a", "https://example.com/b"]);
     const res = await postJson("/links", { url: "https://example.com" }, env);
     expect(res.status).toBe(200);
+    const body = await res.json<Array<{ href: string; text: string | null }>>();
+    expect(body).toEqual([
+      { href: "https://example.com/a", text: null },
+      { href: "https://example.com/b", text: null },
+    ]);
   });
 });
 
@@ -390,7 +442,7 @@ describe("POST /a11y", () => {
     await postJson("/a11y", { url: "https://example.com" }, env);
     const res = await postJson("/a11y", { url: "https://example.com" }, env);
     expect(res.headers.get("X-Cache")).toBe("HIT");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cfApiCalls()).toHaveLength(1);
   });
 });
 
@@ -410,7 +462,7 @@ describe("Cookie/header forwarding", () => {
     );
     expect(res.status).toBe(200);
     // Verify cookies were passed through to CF API
-    const fetchCall = fetchMock.mock.calls[0];
+    const fetchCall = cfApiCalls()[0];
     const sentBody = JSON.parse(fetchCall[1]?.body as string || fetchCall[0]?.body as string || "{}");
     expect(sentBody.cookies).toEqual(cookies);
   });

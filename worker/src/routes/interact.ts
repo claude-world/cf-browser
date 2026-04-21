@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import type { AppEnv, InteractAction } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
-import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
+import {
+  withBrowser,
+  BrowserBindingUnavailable,
+  performActionAndWaitForNavigation,
+  toBaseBody,
+} from "../lib/puppeteer.js";
 
 const MAX_ACTIONS = 20;
 const TOTAL_TIMEOUT = 50_000; // 50 seconds
@@ -78,13 +83,11 @@ app.post("/", async (c) => {
               continue;
             }
             case "click": {
-              await page.click(action.selector);
-              // Best-effort wait for navigation
-              try {
-                await page.waitForNavigation({ timeout: 3000 });
-              } catch {
-                // No navigation — fine
-              }
+              await performActionAndWaitForNavigation(
+                page,
+                () => page.click(action.selector),
+                3000,
+              );
               results.push({ action: "click", ok: true });
               continue;
             }
