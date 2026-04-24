@@ -24,7 +24,7 @@ Add to your `.mcp.json`. Two modes are supported:
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_ACCOUNT_ID": "your-cloudflare-account-id",
@@ -42,7 +42,7 @@ Add to your `.mcp.json`. Two modes are supported:
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_BROWSER_URL": "https://cf-browser.YOUR-SUBDOMAIN.workers.dev",

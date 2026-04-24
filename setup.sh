@@ -45,6 +45,7 @@ if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
 fi
 
 PYTHON_CMD=$(command -v python3 || command -v python)
+PYTHON_MCP_CMD=$(basename "$PYTHON_CMD")
 
 # Verify Python version >= 3.10
 if ! "$PYTHON_CMD" -c "import sys; assert sys.version_info >= (3,10)" 2>/dev/null; then
@@ -176,6 +177,10 @@ id = "${RATE_LIMIT_ID}"
 binding = "STORAGE"
 bucket_name = "cf-browser-storage"
 
+# Browser Rendering binding (Workers Paid plan; required for interaction tools)
+[browser]
+binding = "BROWSER"
+
 [dev]
 port = 8787
 TOML
@@ -271,7 +276,7 @@ cat << JSON
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "${PYTHON_MCP_CMD}",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_BROWSER_URL": "${WORKER_URL}",

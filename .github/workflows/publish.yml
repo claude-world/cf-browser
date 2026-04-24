@@ -38,7 +38,15 @@ jobs:
         working-directory: worker
         run: |
           npm install
+          npm run type-check
           npm test
+
+      - name: Test MCP Server
+        working-directory: mcp-server
+        run: |
+          pip install -e ../sdk
+          pip install -e ".[dev]"
+          pytest tests/ -v
 
   publish-sdk:
     needs: test

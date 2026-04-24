@@ -41,6 +41,7 @@ jobs:
         with:
           node-version: "20"
       - run: npm install
+      - run: npm run type-check
       - run: npm test
 
   mcp-server:

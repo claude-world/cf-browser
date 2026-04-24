@@ -45,9 +45,10 @@ function isPrivateIpLiteral(host: string): boolean {
 
   if (isIpv4Literal(host)) {
     // Block private IP ranges:
-    //   0.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x (link-local)
+    //   0.x, 10.x, 127.x (loopback), 172.16-31.x, 192.168.x,
+    //   169.254.x (link-local)
     //   100.64-127.x (CGNAT / RFC 6598)
-    return /^(0\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(
+    return /^(0\.|10\.|127\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(
       host
     );
   }

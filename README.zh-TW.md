@@ -139,7 +139,7 @@ pip install cf-browser cf-browser-mcp
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_ACCOUNT_ID": "<你的帳號-ID>",
@@ -238,7 +238,7 @@ cd ../mcp-server && pip install -e .
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_BROWSER_URL": "https://cf-browser.<your-subdomain>.workers.dev",

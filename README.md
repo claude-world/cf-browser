@@ -6,7 +6,7 @@ Open-source tool that gives Claude Code **15 MCP tools + 6 ready-to-use Skills**
 
 [![PyPI - cf-browser](https://img.shields.io/pypi/v/cf-browser?label=cf-browser)](https://pypi.org/project/cf-browser/)
 [![PyPI - cf-browser-mcp](https://img.shields.io/pypi/v/cf-browser-mcp?label=cf-browser-mcp)](https://pypi.org/project/cf-browser-mcp/)
-[![Tests](https://github.com/claude-world/cf-browser/actions/workflows/test.yml/badge.svg)](https://github.com/claude-world/cf-browser/actions/workflows/test.yml)
+[![Tests](https://github.com/claude-world/cf-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/claude-world/cf-browser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Why CF Browser?
@@ -50,7 +50,7 @@ Add to your `.mcp.json`:
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_ACCOUNT_ID": "<your-account-id>",
@@ -143,7 +143,7 @@ Add to your project's `.mcp.json`:
   "mcpServers": {
     "cf-browser": {
       "type": "stdio",
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
         "CF_BROWSER_URL": "https://cf-browser.<your-subdomain>.workers.dev",
