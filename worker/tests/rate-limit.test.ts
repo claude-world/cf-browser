@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
 import { rateLimitMiddleware } from "../src/middleware/rate-limit.js";
-import type { Env } from "../src/types.js";
+import type { AppEnv } from "../src/types.js";
 
 function makeRateLimiter(limit = 60): RateLimit {
   let count = 0;
@@ -11,7 +11,7 @@ function makeRateLimiter(limit = 60): RateLimit {
 }
 
 function buildApp(rateLimiter: RateLimit) {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
 
   // Seed apiKey as auth middleware would
   app.use("*", async (c, next) => {

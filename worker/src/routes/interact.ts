@@ -3,6 +3,7 @@ import type { AppEnv, InteractAction } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
 import {
   withBrowser,
+  BlockedNavigationError,
   BrowserBindingUnavailable,
   performActionAndWaitForNavigation,
   toBaseBody,
@@ -288,6 +289,9 @@ app.post("/", async (c) => {
   } catch (err) {
     if (err instanceof BrowserBindingUnavailable) {
       return c.json({ error: boundedInteractionErrorMessage(err, "Browser unavailable"), status: 501 }, 501);
+    }
+    if (err instanceof BlockedNavigationError) {
+      return c.json({ error: boundedInteractionErrorMessage(err, "Navigation blocked"), status: 400 }, 400);
     }
     const message = boundedInteractionErrorMessage(err, "Interact failed");
     return c.json({ error: message, status: 500 }, 500);

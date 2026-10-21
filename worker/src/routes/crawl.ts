@@ -5,22 +5,23 @@ import { CfBrowserApi } from "../lib/cf-api.js";
 import { validateUrl } from "../lib/validate-url.js";
 import { mapToCfParams } from "../lib/param-map.js";
 import { hashApiKey } from "../middleware/rate-limit.js";
+import { r2ObjectKey } from "../lib/r2-keys.js";
 
 /**
  * Crawl routes:
  *   POST /crawl          — start a new crawl job, returns job ID
  *   GET  /crawl/:id      — poll status / retrieve completed results
  *
- * Completed results are stored in R2 under key `crawl:{jobId}` so subsequent
+ * Completed results are stored in R2 under key `cf-browser/crawl:{jobId}` so subsequent
  * polls for a finished job don't hit the CF API again.
  */
 const app = new Hono<AppEnv>();
 
-const R2_KEY_PREFIX = "crawl:";
-const OWNER_KEY_PREFIX = "crawl-owner:";
+const R2_KEY_PREFIX = r2ObjectKey("crawl:");
+const OWNER_KEY_PREFIX = r2ObjectKey("crawl-owner:");
 const FALLBACK_OWNER_KEY_PREFIX = "crawl-owner-fallback:";
 const KV_TOMBSTONE_KEY_PREFIX = "crawl-tombstone:";
-const R2_TOMBSTONE_KEY_PREFIX = "crawl-tombstone:";
+const R2_TOMBSTONE_KEY_PREFIX = r2ObjectKey("crawl-tombstone:");
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const RETENTION_SECONDS = RETENTION_MS / 1_000;
 // UUID format check for job IDs (CF API returns UUIDs)
@@ -286,20 +287,48 @@ function normalizeCrawlBody(
   };
 }
 
-async function recordOwner(c: Context<AppEnv>, jobId: string) {
-  const apiKey = c.get("apiKey") as string;
-  await c.env.STORAGE.put(`${OWNER_KEY_PREFIX}${jobId}`, await hashApiKey(apiKey), {
+type OwnerClaim = "claimed" | "conflict";
+
+// Owner records are create-only: if Cloudflare ever hands back a job ID that
+// another API key already owns (for example a cached crawl), never take it over.
+async function recordOwner(c: Context<AppEnv>, jobId: string): Promise<OwnerClaim> {
+  const owner = await hashApiKey(c.get("apiKey") as string);
+  const key = `${OWNER_KEY_PREFIX}${jobId}`;
+  const stored = await c.env.STORAGE.put(key, owner, {
+    onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: { contentType: "text/plain" },
     customMetadata: { created_at: String(Date.now()) },
   });
+  if (stored !== null) return "claimed";
+  try {
+    const existing = await c.env.STORAGE.get(key);
+    return existing !== null && await existing.text() === owner ? "claimed" : "conflict";
+  } catch (error) {
+    // The job may belong to someone else, so never fall through to cancellation.
+    console.warn("Crawl owner conflict check failed", error);
+    return "conflict";
+  }
 }
 
-async function recordFallbackOwner(c: Context<AppEnv>, jobId: string) {
-  const apiKey = c.get("apiKey") as string;
-  await c.env.CACHE.put(`${FALLBACK_OWNER_KEY_PREFIX}${jobId}`, await hashApiKey(apiKey), {
+async function recordFallbackOwner(c: Context<AppEnv>, jobId: string): Promise<OwnerClaim> {
+  const owner = await hashApiKey(c.get("apiKey") as string);
+  const key = `${FALLBACK_OWNER_KEY_PREFIX}${jobId}`;
+  // KV has no conditional writes; refuse to replace a different owner.
+  const existing = await c.env.CACHE.get(key);
+  if (existing !== null) return existing === owner ? "claimed" : "conflict";
+  await c.env.CACHE.put(key, owner, {
     expirationTtl: RETENTION_SECONDS,
     metadata: { created_at: Date.now() },
   });
+  return "claimed";
+}
+
+function ownerConflict(c: Context<AppEnv>) {
+  return c.json({
+    error: "Cloudflare returned a crawl job that cannot be assigned to this API key; " +
+      "retry with cache_ttl=0",
+    status: 409,
+  }, 409);
 }
 
 async function fallbackOwnsJob(c: Context<AppEnv>, jobId: string, expectedOwner: string) {
@@ -454,8 +483,9 @@ app.post("/", async (c) => {
   if (typeof jobId !== "string" || !UUID_RE.test(jobId)) {
     return c.json({ error: "Cloudflare crawl response missing job ID", status: 502 }, 502);
   }
+  let claim: OwnerClaim;
   try {
-    await recordOwner(c, jobId);
+    claim = await recordOwner(c, jobId);
   } catch (error) {
     const cancelled = await api.deleteCrawl(jobId);
     const cancellationConfirmed = cancelled.ok && isConfirmedCancellation(jobId, cancelled.data);
@@ -465,7 +495,7 @@ app.post("/", async (c) => {
     });
     if (!cancellationConfirmed) {
       try {
-        await recordFallbackOwner(c, jobId);
+        if (await recordFallbackOwner(c, jobId) === "conflict") return ownerConflict(c);
         console.warn("Crawl cancellation failed; ownership retained in KV fallback", { jobId });
         return c.json({ job_id: jobId, status: "started" }, 202);
       } catch (fallbackError) {
@@ -479,6 +509,7 @@ app.post("/", async (c) => {
     }
     return c.json({ error: "Unable to persist crawl ownership", status: 503 }, 503);
   }
+  if (claim === "conflict") return ownerConflict(c);
   return c.json({ job_id: jobId, status: "started" }, 202);
 });
 

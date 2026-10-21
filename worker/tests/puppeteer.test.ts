@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/types.js";
 
 const puppeteerMock = vi.hoisted(() => ({
@@ -10,6 +10,7 @@ vi.mock("@cloudflare/puppeteer", () => ({
 }));
 
 import {
+  BlockedNavigationError,
   BrowserBindingUnavailable,
   toBaseBody,
   withBrowser,
@@ -28,7 +29,10 @@ function buildEnv(): Env {
 }
 
 function buildBrowser() {
+  const mainFrame = {};
   const page = {
+    mainFrame: vi.fn(() => mainFrame),
+    setBypassServiceWorker: vi.fn(async () => undefined),
     setViewport: vi.fn(async () => undefined),
     setUserAgent: vi.fn(async () => undefined),
     setExtraHTTPHeaders: vi.fn(async () => undefined),
@@ -44,13 +48,31 @@ function buildBrowser() {
   const browser = {
     newPage: vi.fn(async () => page),
     close: vi.fn(async () => undefined),
+    on: vi.fn(),
   };
   puppeteerMock.launch.mockResolvedValue(browser);
-  return { page, browser };
+  return { page, browser, mainFrame };
 }
+
+let dnsAnswer = "93.184.216.34";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  dnsAnswer = "93.184.216.34";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    const host = url.searchParams.get("name") ?? "";
+    const type = url.searchParams.get("type");
+    const data = host.startsWith("internal.") ? "10.0.0.7" : dnsAnswer;
+    return new Response(JSON.stringify({
+      Status: 0,
+      Answer: type === "A" ? [{ data }] : [],
+    }), { headers: { "Content-Type": "application/dns-json" } });
+  }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("withBrowser", () => {
@@ -182,6 +204,61 @@ describe("withBrowser", () => {
 
     await vi.waitFor(() => expect(request.abort).toHaveBeenCalledWith("blockedbyclient"));
     expect(request.continue).not.toHaveBeenCalled();
+  });
+
+  it("rejects targets that resolve to private addresses before launching a browser", async () => {
+    buildBrowser();
+    dnsAnswer = "10.1.2.3";
+
+    await expect(
+      withBrowser(buildEnv(), { url: "https://example.com" }, async () => undefined),
+    ).rejects.toBeInstanceOf(BlockedNavigationError);
+    expect(puppeteerMock.launch).not.toHaveBeenCalled();
+  });
+
+  it("reports a main-frame redirect to a blocked destination as a blocked navigation", async () => {
+    const { page, browser, mainFrame } = buildBrowser();
+    let requestHandler: ((request: unknown) => void) | undefined;
+    page.on.mockImplementation((_event: string, handler: (request: unknown) => void) => {
+      requestHandler = handler;
+    });
+    const redirect = {
+      resourceType: vi.fn(() => "document"),
+      url: vi.fn(() => "https://internal.example.com/admin"),
+      isNavigationRequest: vi.fn(() => true),
+      frame: vi.fn(() => mainFrame),
+      abort: vi.fn(async () => undefined),
+      continue: vi.fn(async () => undefined),
+    };
+    page.goto.mockImplementation(async () => {
+      requestHandler?.(redirect);
+      await vi.waitFor(() => expect(redirect.abort).toHaveBeenCalledWith("blockedbyclient"));
+      throw new Error("net::ERR_BLOCKED_BY_CLIENT at https://example.com");
+    });
+
+    await expect(
+      withBrowser(buildEnv(), { url: "https://example.com" }, async () => undefined),
+    ).rejects.toBeInstanceOf(BlockedNavigationError);
+    expect(redirect.continue).not.toHaveBeenCalled();
+    expect(browser.close).toHaveBeenCalledOnce();
+  });
+
+  it("bypasses service workers and closes popups opened by the page", async () => {
+    const { page, browser } = buildBrowser();
+    let targetHandler: ((target: unknown) => void) | undefined;
+    browser.on.mockImplementation((event: string, handler: (target: unknown) => void) => {
+      if (event === "targetcreated") targetHandler = handler;
+    });
+    const popup = { close: vi.fn(async () => undefined) };
+
+    await withBrowser(buildEnv(), { url: "https://example.com" }, async () => {
+      targetHandler?.({ type: () => "page", page: async () => popup });
+      targetHandler?.({ type: () => "page", page: async () => page });
+      targetHandler?.({ type: () => "service_worker", page: async () => null });
+    });
+
+    expect(page.setBypassServiceWorker).toHaveBeenCalledWith(true);
+    await vi.waitFor(() => expect(popup.close).toHaveBeenCalledOnce());
   });
 
   it("fails clearly without a browser binding", async () => {

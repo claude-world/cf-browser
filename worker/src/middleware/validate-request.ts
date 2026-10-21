@@ -1,5 +1,24 @@
 import type { Context, Next } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { AppEnv } from "../types.js";
+
+/**
+ * Largest accepted request body. Requests carry a URL plus options; the
+ * biggest legitimate fields are injected script/style tags and JSON schemas,
+ * so 2 MiB leaves ample room while bounding parse memory per request.
+ */
+export const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+/** Deeper JSON is rejected before recursive option handling or cache hashing. */
+export const MAX_JSON_DEPTH = 64;
+
+/** Enforced after authentication and before the body is read or parsed. */
+export const requestBodyLimit = bodyLimit({
+  maxSize: MAX_REQUEST_BODY_BYTES,
+  onError: (c) => c.json({
+    error: `Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`,
+    status: 413,
+  }, 413),
+});
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -43,6 +62,27 @@ function taggedResources(value: unknown): boolean {
     )) return false;
     return contentValid || urlValid;
   });
+}
+
+/** Reject prototype-mutating keys and pathological nesting anywhere in the body. */
+export function validateJsonShape(value: unknown): string | null {
+  const pending: Array<[unknown, number]> = [[value, 1]];
+  for (let entry = pending.pop(); entry; entry = pending.pop()) {
+    const [item, depth] = entry;
+    if (item === null || typeof item !== "object") continue;
+    if (depth > MAX_JSON_DEPTH) {
+      return `JSON body must not be nested more than ${MAX_JSON_DEPTH} levels deep`;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) pending.push([child, depth + 1]);
+      continue;
+    }
+    for (const [key, child] of Object.entries(item)) {
+      if (key === "__proto__") return "JSON body must not contain __proto__ keys";
+      pending.push([child, depth + 1]);
+    }
+  }
+  return null;
 }
 
 /** Validate options shared by Quick Actions and interaction routes. */
@@ -285,6 +325,8 @@ export async function validateRequestMiddleware(
     return c.json({ error: "JSON body must be an object", status: 400 }, 400);
   }
 
+  const shapeError = validateJsonShape(parsed);
+  if (shapeError) return c.json({ error: shapeError, status: 400 }, 400);
   const error = validateCommonOptions(parsed);
   if (error) return c.json({ error, status: 400 }, 400);
   const interactionError = validateInteractionOptions(c.req.path, parsed);

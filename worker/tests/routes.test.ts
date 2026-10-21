@@ -6,6 +6,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import app from "../src/index.js";
 import type { Env } from "../src/types.js";
 import { hashApiKey } from "../src/middleware/rate-limit.js";
+import { r2ObjectKey } from "../src/lib/r2-keys.js";
+import {
+  MAX_JSON_DEPTH,
+  MAX_REQUEST_BODY_BYTES,
+} from "../src/middleware/validate-request.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,15 +68,19 @@ function makeR2(): R2Bucket {
       key: string,
       body: ArrayBuffer | string,
       opts?: {
+        onlyIf?: { etagDoesNotMatch?: string };
         httpMetadata?: { contentType?: string };
         customMetadata?: Record<string, string>;
       }
     ) => {
+      // Mirror R2: a failed precondition stores nothing and resolves to null.
+      if (opts?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) return null;
       store.set(key, {
         body,
         contentType: opts?.httpMetadata?.contentType ?? "application/octet-stream",
         customMetadata: opts?.customMetadata ?? {},
       });
+      return { key };
     },
     delete: async (key: string) => { store.delete(key); },
     list: async () => ({ objects: [], truncated: false }),
@@ -96,7 +105,7 @@ function authHeaders() {
 }
 
 async function putCrawlOwner(env: Env, jobId: string, apiKey = "valid-key") {
-  await env.STORAGE.put(`crawl-owner:${jobId}`, await hashApiKey(apiKey), {
+  await env.STORAGE.put(r2ObjectKey(`crawl-owner:${jobId}`), await hashApiKey(apiKey), {
     customMetadata: { created_at: String(Date.now()) },
   });
 }
@@ -175,9 +184,12 @@ function mockCfJson(data: unknown) {
   );
 }
 
-function mockCfBinary(buffer: ArrayBuffer, contentType: string) {
+function mockCfBinary(buffer: ArrayBufferLike, contentType: string) {
   cfResponses.push(
-    new Response(buffer, { status: 200, headers: { "Content-Type": contentType } })
+    new Response(new Uint8Array(buffer), {
+      status: 200,
+      headers: { "Content-Type": contentType },
+    })
   );
 }
 
@@ -597,7 +609,7 @@ describe("POST /pdf", () => {
     );
 
     expect(res.status).toBe(200);
-    const fetchCall = cfApiCalls()[0];
+    const fetchCall = cfApiCalls()[0]!;
     const sentBody = JSON.parse(fetchCall[1]?.body as string);
     expect(sentBody.pdfOptions).toEqual({ format: "a4", landscape: true });
   });
@@ -1466,7 +1478,7 @@ describe("Cookie/header forwarding", () => {
     );
     expect(res.status).toBe(200);
     // Verify cookies were passed through to CF API
-    const fetchCall = cfApiCalls()[0];
+    const fetchCall = cfApiCalls()[0]!;
     const sentBody = JSON.parse(fetchCall[1]?.body as string || fetchCall[0]?.body as string || "{}");
     expect(sentBody.cookies).toEqual(cookies);
   });
@@ -1500,5 +1512,111 @@ describe("Auth enforcement", () => {
       env
     );
     expect(res.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Request hardening
+// ---------------------------------------------------------------------------
+
+describe("Request hardening", () => {
+  it("never reads bodies of unauthenticated or unknown requests", async () => {
+    const env = buildEnv();
+    const post = (path: string, headers: Record<string, string> = {}) => app.fetch(
+      new Request(`http://localhost${path}`, { method: "POST", headers, body: "{not json" }),
+      env,
+    );
+
+    expect((await post("/content")).status).toBe(401);
+    expect((await post("/health")).status).toBe(404);
+    expect((await post("/nope", authHeaders())).status).toBe(404);
+    expect(cfApiCalls()).toHaveLength(0);
+  });
+
+  it("rejects oversized bodies with 413 before parsing them", async () => {
+    const env = buildEnv();
+    const oversized = JSON.stringify({
+      url: "https://example.com",
+      add_script_tag: [{ content: "x".repeat(MAX_REQUEST_BODY_BYTES) }],
+    });
+
+    const declared = await app.fetch(new Request("http://localhost/content", {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Length": String(oversized.length) },
+      body: oversized,
+    }), env);
+    const streamed = await app.fetch(new Request("http://localhost/content", {
+      method: "POST",
+      headers: authHeaders(),
+      body: new Blob([oversized]).stream(),
+      duplex: "half",
+    } as RequestInit), env);
+
+    expect(declared.status).toBe(413);
+    expect(streamed.status).toBe(413);
+    expect(await streamed.json()).toMatchObject({ status: 413 });
+    expect(cfApiCalls()).toHaveLength(0);
+  });
+
+  it("rejects __proto__ keys at any depth and excessive nesting", async () => {
+    const env = buildEnv();
+    const send = (raw: string) => app.fetch(new Request("http://localhost/content", {
+      method: "POST",
+      headers: authHeaders(),
+      body: raw,
+    }), env);
+    let nested: unknown = "leaf";
+    for (let depth = 0; depth < MAX_JSON_DEPTH; depth++) nested = { child: nested };
+
+    const topLevel = await send('{"url":"https://example.com","__proto__":{"x":1}}');
+    const deep = await send('{"url":"https://example.com","gotoOptions":{"__proto__":{"x":1}}}');
+    const tooDeep = await send(JSON.stringify({ url: "https://example.com", nested }));
+
+    expect(topLevel.status).toBe(400);
+    expect(deep.status).toBe(400);
+    expect(tooDeep.status).toBe(400);
+    expect(await tooDeep.json()).toMatchObject({ error: expect.stringContaining("nested") });
+    expect(cfApiCalls()).toHaveLength(0);
+  });
+});
+
+describe("POST /crawl ownership", () => {
+  it("never reassigns a job ID that another API key already owns", async () => {
+    const env = buildEnv();
+    env.API_KEYS = "valid-key,other-key";
+    const jobId = "b1c2d3e4-f5a6-4789-9abc-def012345678";
+    await putCrawlOwner(env, jobId, "other-key");
+    mockCfJson({ job_id: jobId });
+
+    const res = await postJson("/crawl", { url: "https://example.com" }, env);
+
+    expect(res.status).toBe(409);
+    expect(cfApiCalls().map((call) => call[1]?.method)).toEqual(["POST"]);
+    const owner = await env.STORAGE.get(r2ObjectKey(`crawl-owner:${jobId}`));
+    expect(await owner?.text()).toBe(await hashApiKey("other-key"));
+  });
+
+  it("accepts a reused job ID that the same API key already owns", async () => {
+    const env = buildEnv();
+    const jobId = "c2d3e4f5-a6b7-4890-8bcd-ef0123456789";
+    await putCrawlOwner(env, jobId);
+    mockCfJson({ job_id: jobId });
+
+    const res = await postJson("/crawl", { url: "https://example.com" }, env);
+
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ job_id: jobId, status: "started" });
+  });
+
+  it("stores crawl state under the managed R2 prefix", async () => {
+    const env = buildEnv();
+    const jobId = "d3e4f5a6-b7c8-4901-9cde-f01234567890";
+    mockCfJson({ job_id: jobId });
+
+    const res = await postJson("/crawl", { url: "https://example.com" }, env);
+
+    expect(res.status).toBe(202);
+    expect(await env.STORAGE.get(`crawl-owner:${jobId}`)).toBeNull();
+    expect(await env.STORAGE.get(r2ObjectKey(`crawl-owner:${jobId}`))).not.toBeNull();
   });
 });

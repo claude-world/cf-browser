@@ -30,9 +30,12 @@ function sortObjectKeys(obj: unknown): unknown {
   if (Array.isArray(obj)) {
     return obj.map(sortObjectKeys);
   }
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(obj as Record<string, unknown>).sort()) {
-    sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
-  }
-  return sorted;
+  // Object.fromEntries defines own properties, so a "__proto__" key is hashed
+  // like any other key instead of silently changing the prototype.
+  return Object.fromEntries(
+    Object.keys(obj as Record<string, unknown>).sort().map((key) => [
+      key,
+      sortObjectKeys((obj as Record<string, unknown>)[key]),
+    ]),
+  );
 }

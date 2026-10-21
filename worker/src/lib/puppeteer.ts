@@ -11,6 +11,7 @@ import puppeteer, {
   type Browser,
   type Page,
   type HTTPRequest,
+  type Target,
 } from "@cloudflare/puppeteer";
 import type { Env, BaseRequestBody, CookieParam, ScriptTag, StyleTag } from "../types.js";
 import { validateUrlWithDns } from "./validate-url.js";
@@ -96,6 +97,14 @@ export class BrowserBindingUnavailable extends Error {
   }
 }
 
+/** The target, or a redirect it followed, resolves to a blocked destination. */
+export class BlockedNavigationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BlockedNavigationError";
+  }
+}
+
 type BrowserContext = {
   page: Page;
   browser: Browser;
@@ -116,6 +125,7 @@ async function handleInterceptedRequest(
   req: HTTPRequest,
   dnsCache: Map<string, Promise<string[]>>,
   rejectedResourceTypes: ReadonlySet<string>,
+  onBlocked: (reason: string) => void,
 ): Promise<void> {
   if (rejectedResourceTypes.has(req.resourceType())) {
     await req.abort("blockedbyclient");
@@ -124,6 +134,7 @@ async function handleInterceptedRequest(
 
   const check = await validateUrlWithDns(req.url(), dnsCache);
   if (!check.valid) {
+    onBlocked(check.error);
     await req.abort("blockedbyclient");
     return;
   }
@@ -144,9 +155,29 @@ export async function withBrowser<T>(
     throw new BrowserBindingUnavailable();
   }
 
+  // Resolve the target before spending a browser session, matching the DNS
+  // check Quick Actions apply before forwarding a URL.
+  const dnsCache = new Map<string, Promise<string[]>>();
+  const target = await validateUrlWithDns(body.url, dnsCache);
+  if (!target.valid) {
+    throw new BlockedNavigationError(target.error);
+  }
+
   const browser = await puppeteer.launch(env.BROWSER);
   try {
     const page = await browser.newPage();
+
+    // Service workers and popups issue requests outside this page's request
+    // interception: bypass the former and close the latter as soon as they open.
+    await page.setBypassServiceWorker(true);
+    browser.on("targetcreated", (created: Target) => {
+      if (created.type() !== "page") return;
+      void created.page()
+        .then(async (opened) => {
+          if (opened && opened !== page) await opened.close();
+        })
+        .catch(() => undefined);
+    });
 
     // Viewport
     await page.setViewport({
@@ -193,11 +224,16 @@ export async function withBrowser<T>(
     }
 
     // SSRF protection: intercept requests to block redirects to private IPs
-    const dnsCache = new Map<string, Promise<string[]>>();
     const rejectedResourceTypes = new Set(body.reject_resource_types ?? []);
+    let blockedNavigation: string | undefined;
     await page.setRequestInterception(true);
     page.on("request", (req) => {
-      void handleInterceptedRequest(req, dnsCache, rejectedResourceTypes).catch(async () => {
+      const onBlocked = (reason: string) => {
+        if (req.isNavigationRequest() && req.frame() === page.mainFrame()) {
+          blockedNavigation ??= reason;
+        }
+      };
+      void handleInterceptedRequest(req, dnsCache, rejectedResourceTypes, onBlocked).catch(async () => {
         try {
           await req.abort("blockedbyclient");
         } catch {
@@ -213,7 +249,12 @@ export async function withBrowser<T>(
         body.goto_options?.waitUntil ?? "load",
       timeout: body.timeout ?? body.goto_options?.timeout ?? 30_000,
     };
-    await page.goto(body.url, gotoOptions);
+    try {
+      await page.goto(body.url, gotoOptions);
+    } catch (error) {
+      if (blockedNavigation) throw new BlockedNavigationError(blockedNavigation);
+      throw error;
+    }
 
     // Match the Quick Actions contract for resources injected after navigation.
     for (const tag of body.add_script_tag ?? []) {

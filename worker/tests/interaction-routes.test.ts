@@ -105,6 +105,26 @@ describe("interaction routes", () => {
     vi.restoreAllMocks();
   });
 
+  it("returns 400 when an interaction navigation is blocked", async () => {
+    vi.spyOn(puppeteerLib, "withBrowser").mockRejectedValue(
+      new puppeteerLib.BlockedNavigationError("URL resolves to a private or reserved IP address"),
+    );
+    for (const [path, payload] of [
+      ["/click", { selector: "a" }],
+      ["/type", { selector: "input", text: "hello" }],
+      ["/evaluate", { script: "1 + 1" }],
+      ["/interact", { actions: [{ action: "click", selector: "a" }] }],
+      ["/submit-form", { fields: { "input[name=q]": "x" } }],
+    ] as const) {
+      const res = await postJson(path, { url: "https://example.com", ...payload }, buildEnv());
+      expect(res.status, path).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error: "URL resolves to a private or reserved IP address",
+        status: 400,
+      });
+    }
+  });
+
   it("POST /click returns page state", async () => {
     const res = await postJson("/click", { url: "https://example.com", selector: "a.next" }, buildEnv());
     expect(res.status).toBe(200);

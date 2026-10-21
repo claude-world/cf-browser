@@ -30,4 +30,19 @@ describe("generateCacheKey", () => {
     const b = await generateCacheKey("content", "https://other.com", {});
     expect(a).not.toBe(b);
   });
+
+  it("hashes __proto__ keys instead of dropping them", async () => {
+    const plain = await generateCacheKey("content", "https://example.com", {});
+    const topLevel = await generateCacheKey(
+      "content", "https://example.com", JSON.parse('{"__proto__":{"x":1}}'),
+    );
+    const nested = await generateCacheKey(
+      "content", "https://example.com", JSON.parse('{"gotoOptions":{"__proto__":{"x":1}}}'),
+    );
+    const nestedPlain = await generateCacheKey(
+      "content", "https://example.com", { gotoOptions: {} },
+    );
+    expect(topLevel).not.toBe(plain);
+    expect(nested).not.toBe(nestedPlain);
+  });
 });

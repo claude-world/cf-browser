@@ -3,7 +3,10 @@ import { cors } from "hono/cors";
 import type { AppEnv } from "./types.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
-import { validateRequestMiddleware } from "./middleware/validate-request.js";
+import {
+  requestBodyLimit,
+  validateRequestMiddleware,
+} from "./middleware/validate-request.js";
 import contentRoute from "./routes/content.js";
 import screenshotRoute from "./routes/screenshot.js";
 import pdfRoute from "./routes/pdf.js";
@@ -73,28 +76,20 @@ app.get("/health", (c) => {
 // Authenticated + rate-limited routes
 // ---------------------------------------------------------------------------
 
-// Read-only routes
-app.use("/content/*", authMiddleware, rateLimitMiddleware);
-app.use("/screenshot/*", authMiddleware, rateLimitMiddleware);
-app.use("/pdf/*", authMiddleware, rateLimitMiddleware);
-app.use("/markdown/*", authMiddleware, rateLimitMiddleware);
-app.use("/snapshot/*", authMiddleware, rateLimitMiddleware);
-app.use("/scrape/*", authMiddleware, rateLimitMiddleware);
-app.use("/json/*", authMiddleware, rateLimitMiddleware);
-app.use("/links/*", authMiddleware, rateLimitMiddleware);
-app.use("/crawl/*", authMiddleware, rateLimitMiddleware);
-app.use("/a11y/*", authMiddleware, rateLimitMiddleware);
+const API_PATHS = [
+  // Read-only routes
+  "/content/*", "/screenshot/*", "/pdf/*", "/markdown/*", "/snapshot/*",
+  "/scrape/*", "/json/*", "/links/*", "/crawl/*", "/a11y/*",
+  // Interaction routes (require BROWSER binding)
+  "/click/*", "/type/*", "/evaluate/*", "/interact/*", "/submit-form/*",
+];
 
-// Interaction routes (require BROWSER binding)
-app.use("/click/*", authMiddleware, rateLimitMiddleware);
-app.use("/type/*", authMiddleware, rateLimitMiddleware);
-app.use("/evaluate/*", authMiddleware, rateLimitMiddleware);
-app.use("/interact/*", authMiddleware, rateLimitMiddleware);
-app.use("/submit-form/*", authMiddleware, rateLimitMiddleware);
-
-// Parse and validate shared request options after authentication. Hono caches
-// the parsed body, so route handlers can read it again without consuming it.
-app.use("*", validateRequestMiddleware);
+// Authenticate and rate-limit first, then cap the body size and validate shared
+// request options, so unauthenticated or unknown requests never have their body
+// read. Hono caches the parsed body, so route handlers can read it again.
+for (const path of API_PATHS) {
+  app.use(path, authMiddleware, rateLimitMiddleware, requestBodyLimit, validateRequestMiddleware);
+}
 
 // ---------------------------------------------------------------------------
 // Route handlers

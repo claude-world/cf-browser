@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { AppEnv, CacheMeta } from "../types.js";
 import { generateCacheKey } from "../lib/cache-key.js";
+import { r2ObjectKey } from "../lib/r2-keys.js";
 
 export type CacheStorage = "kv" | "r2";
 
@@ -30,7 +31,8 @@ export async function getCached(
     }
 
     // R2
-    const obj = await c.env.STORAGE.get(cacheKey);
+    const objectKey = r2ObjectKey(cacheKey);
+    const obj = await c.env.STORAGE.get(objectKey);
     if (obj === null) return { hit: false };
 
     const cachedAt = Number(obj.customMetadata?.cached_at);
@@ -41,7 +43,7 @@ export async function getCached(
       ttl <= 0 ||
       Date.now() >= cachedAt + ttl * 1_000
     ) {
-      await c.env.STORAGE.delete(cacheKey);
+      await c.env.STORAGE.delete(objectKey);
       return { hit: false };
     }
 
@@ -85,7 +87,7 @@ export async function setCached(
     }
 
     // R2
-    await c.env.STORAGE.put(cacheKey, data, {
+    await c.env.STORAGE.put(r2ObjectKey(cacheKey), data, {
       httpMetadata: { contentType },
       customMetadata: { cached_at: String(Date.now()), ttl: String(ttlSeconds) },
     });
