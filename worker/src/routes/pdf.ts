@@ -39,9 +39,46 @@ app.post("/", async (c) => {
   }
 
   const api = new CfBrowserApi(c.env.CF_ACCOUNT_ID, c.env.CF_API_TOKEN);
-  // Strip format/landscape — CF Browser Rendering REST API /pdf endpoint
-  // does not accept these options (unlike the Puppeteer Workers Binding API).
-  const { no_cache: _skip, format: _fmt, landscape: _ls, ...cfBody } = body;
+  const { no_cache: _skip, format, landscape, ...cfBody } = body;
+
+  const allowedFormats = new Set([
+    "letter", "legal", "tabloid", "ledger", "a0", "a1", "a2", "a3", "a4", "a5", "a6",
+  ]);
+  if (format !== undefined && (typeof format !== "string" || !allowedFormats.has(format.toLowerCase()))) {
+    return c.json({ error: "Unsupported PDF format", status: 400 }, 400);
+  }
+  if (landscape !== undefined && typeof landscape !== "boolean") {
+    return c.json({ error: "landscape must be a boolean", status: 400 }, 400);
+  }
+  if (
+    cfBody.pdfOptions !== undefined &&
+    (typeof cfBody.pdfOptions !== "object" ||
+      cfBody.pdfOptions === null ||
+      Array.isArray(cfBody.pdfOptions))
+  ) {
+    return c.json({ error: "pdfOptions must be an object", status: 400 }, 400);
+  }
+
+  const existingPdfOptions =
+    cfBody.pdfOptions && typeof cfBody.pdfOptions === "object" && !Array.isArray(cfBody.pdfOptions)
+      ? cfBody.pdfOptions as Record<string, unknown>
+      : {};
+  if (existingPdfOptions.format !== undefined && (
+    typeof existingPdfOptions.format !== "string" ||
+    !allowedFormats.has(existingPdfOptions.format.toLowerCase())
+  )) {
+    return c.json({ error: "Unsupported pdfOptions.format", status: 400 }, 400);
+  }
+  if (existingPdfOptions.landscape !== undefined && typeof existingPdfOptions.landscape !== "boolean") {
+    return c.json({ error: "pdfOptions.landscape must be a boolean", status: 400 }, 400);
+  }
+  if (format !== undefined || landscape !== undefined) {
+    cfBody.pdfOptions = {
+      ...existingPdfOptions,
+      ...(format !== undefined ? { format: format.toLowerCase() } : {}),
+      ...(landscape !== undefined ? { landscape } : {}),
+    };
+  }
   const cfPayload = mapToCfParams(cfBody);
 
   const result = await api.pdf(cfPayload);

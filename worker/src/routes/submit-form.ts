@@ -3,10 +3,16 @@ import type { AppEnv } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
 import {
   withBrowser,
+  BlockedNavigationError,
   BrowserBindingUnavailable,
   performActionAndWaitForNavigation,
   toBaseBody,
 } from "../lib/puppeteer.js";
+import {
+  boundedInteractionErrorMessage,
+  boundedPageState,
+  InteractionOutputLimitError,
+} from "../lib/output-limit.js";
 
 const app = new Hono<AppEnv>();
 
@@ -33,8 +39,10 @@ app.post("/", async (c) => {
 
   const fields = body.fields as Record<string, unknown>;
   const submitSelector = body.submit_selector;
-  if (submitSelector !== undefined && typeof submitSelector !== "string") {
-    return c.json({ error: "submit_selector must be a string", status: 400 }, 400);
+  if (submitSelector !== undefined && (
+    typeof submitSelector !== "string" || submitSelector.trim().length === 0
+  )) {
+    return c.json({ error: "submit_selector must be a non-empty string", status: 400 }, 400);
   }
 
   // Validate fields count
@@ -45,6 +53,9 @@ app.post("/", async (c) => {
 
   // Validate selector lengths and value types
   for (const [selector, value] of fieldEntries) {
+    if (selector.trim().length === 0) {
+      return c.json({ error: "Field selector must be a non-empty string", status: 400 }, 400);
+    }
     if (selector.length > 500) {
       return c.json({ error: "Field selector exceeds 500 character limit", status: 400 }, 400);
     }
@@ -111,19 +122,21 @@ app.post("/", async (c) => {
         }
       }
 
-      const url = page.url();
-      const title = await page.title();
-      const content = await page.content();
-
-      return { url, title, content };
+      return boundedPageState(page);
     });
 
     return c.json(result);
   } catch (err) {
     if (err instanceof BrowserBindingUnavailable) {
-      return c.json({ error: err.message, status: 501 }, 501);
+      return c.json({ error: boundedInteractionErrorMessage(err, "Browser unavailable"), status: 501 }, 501);
     }
-    const message = err instanceof Error ? err.message : "Form submission failed";
+    if (err instanceof BlockedNavigationError) {
+      return c.json({ error: boundedInteractionErrorMessage(err, "Navigation blocked"), status: 400 }, 400);
+    }
+    if (err instanceof InteractionOutputLimitError) {
+      return c.json({ error: boundedInteractionErrorMessage(err, "Interaction output failed"), status: 502 }, 502);
+    }
+    const message = boundedInteractionErrorMessage(err, "Form submission failed");
     return c.json({ error: message, status: 500 }, 500);
   }
 });

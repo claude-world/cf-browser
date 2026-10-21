@@ -40,7 +40,19 @@ app.post("/", async (c) => {
   }
 
   const api = new CfBrowserApi(c.env.CF_ACCOUNT_ID, c.env.CF_API_TOKEN);
-  const { no_cache: _skip, ...cfBody } = body;
+  const { no_cache: _skip, include_external, visible_only, ...cfBody } = body;
+  if (include_external !== undefined) {
+    if (typeof include_external !== "boolean") {
+      return c.json({ error: "include_external must be a boolean", status: 400 }, 400);
+    }
+    cfBody.excludeExternalLinks = !include_external;
+  }
+  if (visible_only !== undefined) {
+    if (typeof visible_only !== "boolean") {
+      return c.json({ error: "visible_only must be a boolean", status: 400 }, 400);
+    }
+    cfBody.visibleLinksOnly = visible_only;
+  }
   const cfPayload = mapToCfParams(cfBody);
   const result = await api.links(cfPayload);
 
@@ -49,6 +61,9 @@ app.post("/", async (c) => {
   }
 
   const normalized = normalizeLinksResponse(result.data);
+  if (normalized === null) {
+    return c.json({ error: "Cloudflare returned malformed links data", status: 502 }, 502);
+  }
 
   if (!noCache) {
     await setCached(

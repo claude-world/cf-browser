@@ -1,7 +1,7 @@
 ---
 name: site-auditor
-description: Audit website SEO, links, and accessibility using CF Browser Rendering
-user_invocable: true
+description: Audit website SEO, links, and accessibility using Cloudflare Browser Run
+user-invocable: true
 ---
 
 # Site Auditor
@@ -10,7 +10,7 @@ Comprehensive website audit for SEO, broken links, and accessibility.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
+CF Browser MCP server must be configured (see the [CF Browser quick start](https://github.com/claude-world/cf-browser#quick-start)).
 
 ## Workflow
 
@@ -24,12 +24,10 @@ browser_crawl(url, limit=50)
 
 ### Step 2: Quick Analysis from Crawl Data
 
-The crawl results already include per-page `metadata` with title, OG tags, and HTTP status.
-Parse these first — this covers 80% of SEO checks with zero extra API calls:
+The crawl records include URL, record status, and page metadata such as final URL, title, and HTTP status. Parse only fields actually present before making extra calls:
 - `metadata.title` → check for missing/duplicate titles
-- `metadata.og:title`, `og:description`, `og:image` → check OG completeness
 - `metadata.status` → identify 4xx/5xx error pages
-- `metadata.url` → detect redirect chains (final URL != original)
+- `metadata.url` versus record URL → identify a final-URL change; do not claim a full redirect chain without separate evidence
 
 ### Step 3: Deep Scrape (only pages with issues)
 
@@ -47,7 +45,8 @@ Batch scrape in groups of 5 to respect rate limits.
 Using `browser_links` on 3-5 key pages (homepage, major sections):
 - Categorize: internal, external, resource
 - Cross-reference with crawl results to find orphan pages
-- Identify links pointing to 4xx/5xx pages found in Step 2
+- Identify links pointing to 4xx/5xx pages already evidenced by crawl records
+- Treat external links as unverified until each destination is separately fetched or checked
 
 ### Step 5: Generate Report
 
@@ -62,8 +61,8 @@ Output a markdown report with sections:
 
 #### Link Health
 - Broken internal links (404s)
-- Broken external links
-- Redirect chains (>2 hops)
+- Broken external links (only when separately verified)
+- Redirect chains (only when hop-by-hop evidence is available)
 - Orphan pages
 
 #### Accessibility

@@ -28,6 +28,12 @@ describe("mapToCfParams", () => {
     expect(result.headers).toBeUndefined();
   });
 
+  it("preserves HTTP Basic Auth credentials for current Quick Actions APIs", () => {
+    const authenticate = { username: "user", password: "pass" };
+    const result = mapToCfParams({ url: "https://example.com", authenticate });
+    expect(result.authenticate).toEqual(authenticate);
+  });
+
   // -----------------------------------------------------------------------
   // timeout → gotoOptions.timeout
   // -----------------------------------------------------------------------

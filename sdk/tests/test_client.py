@@ -2,6 +2,7 @@
 Tests for CFBrowser SDK client.
 Uses respx to mock httpx requests.
 """
+
 import asyncio
 import json
 import pytest
@@ -9,7 +10,12 @@ import respx
 import httpx
 
 from cf_browser import CFBrowser
-from cf_browser.exceptions import AuthenticationError, RateLimitError, CFBrowserError
+from cf_browser.exceptions import (
+    AuthenticationError,
+    CFBrowserError,
+    RateLimitError,
+    TransportError,
+)
 from cf_browser.models import LinkItem, CrawlJob, CrawlResult
 
 
@@ -21,14 +27,79 @@ API_KEY = "test-api-key-123"
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def client():
     return CFBrowser(base_url=BASE_URL, api_key=API_KEY)
 
 
+@pytest.mark.parametrize(
+    ("base_url", "api_key", "message"),
+    [("", API_KEY, "base_url"), (BASE_URL, "", "api_key")],
+)
+def test_constructor_rejects_missing_credentials(base_url, api_key, message):
+    with pytest.raises(ValueError, match=message):
+        CFBrowser(base_url=base_url, api_key=api_key)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "timeout", "message"),
+    [
+        ("not-a-url", 30, "absolute HTTP"),
+        ("https://user:pass@example.com", 30, "without credentials"),
+        (BASE_URL, True, "timeout must be greater"),
+        (BASE_URL, float("inf"), "timeout must be greater"),
+    ],
+)
+def test_constructor_rejects_invalid_transport_configuration(base_url, timeout, message):
+    with pytest.raises(ValueError, match=message):
+        CFBrowser(base_url=base_url, api_key=API_KEY, timeout=timeout)
+
+
+def test_default_transport_timeout_covers_worker_proxy_overhead(client):
+    assert client._client.timeout.read == 320.0
+
+
+@pytest.mark.parametrize(
+    "api_key", [" secret-key", "secret-key\n", "secret key", "secret-key\x00", "sécret-key"]
+)
+def test_constructor_rejects_header_unsafe_api_keys_without_echoing_them(api_key):
+    with pytest.raises(ValueError, match="visible ASCII") as exc_info:
+        CFBrowser(base_url=BASE_URL, api_key=api_key)
+    assert "secret" not in str(exc_info.value)
+
+
+def test_connect_timeout_fails_fast_without_shortening_actions(client):
+    assert client._client.timeout.connect == 10.0
+    assert CFBrowser(base_url=BASE_URL, api_key=API_KEY, timeout=3)._client.timeout.connect == 3
+
+
+@pytest.mark.asyncio
+async def test_local_protocol_errors_are_never_echoed(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/content").mock(
+            side_effect=httpx.LocalProtocolError("Illegal header value b'Bearer leaked-secret'")
+        )
+        with pytest.raises(TransportError) as exc_info:
+            await client.content("https://example.com")
+    assert "leaked-secret" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [".", ".."])
+async def test_crawl_job_ids_cannot_escape_the_crawl_path(client, job_id):
+    with pytest.raises(ValueError, match="relative path segment"):
+        await client.crawl_status(job_id)
+    with pytest.raises(ValueError, match="relative path segment"):
+        await client.delete_crawl(job_id)
+
+
 # ---------------------------------------------------------------------------
 # content()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_content_returns_string(client):
@@ -73,9 +144,78 @@ async def test_content_no_cache_flag(client):
     assert sent.get("no_cache") is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "no_cache", "message"),
+    [("", False, "url must be"), ("https://example.com", "yes", "no_cache must be")],
+)
+async def test_content_rejects_invalid_core_arguments(client, url, no_cache, message):
+    with pytest.raises(ValueError, match=message):
+        await client.content(url, no_cache=no_cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"waitForSelector": "#app"}, "waitForSelector must be a dictionary"),
+        ({"waitForSelector": {}}, "waitForSelector.selector"),
+        ({"waitForSelector": {"selector": "", "timeout": 1000}}, "selector"),
+        ({"waitForSelector": {"selector": "#app", "timeout": True}}, "timeout"),
+        ({"waitForSelector": {"selector": "#app", "timeout": None}}, "timeout"),
+        ({"waitForSelector": {"selector": "#app", "timeout": 120_001}}, "timeout"),
+        ({"waitForSelector": {"selector": "#app", "hidden": None}}, "hidden"),
+        ({"actionTimeout": True}, "actionTimeout"),
+        ({"actionTimeout": 120_001}, "actionTimeout"),
+        ({"waitForTimeout": 0}, "waitForTimeout"),
+        ({"waitForTimeout": 120_001}, "waitForTimeout"),
+        ({"gotoOptions": None}, "gotoOptions must be a dictionary"),
+        ({"gotoOptions": {"referer": 42}}, "gotoOptions.referer"),
+        ({"viewport": None}, "viewport must be a dictionary"),
+        ({"viewport": {"width": 7_681}}, "viewport.width"),
+        ({"bestAttempt": None}, "bestAttempt"),
+        ({"setJavaScriptEnabled": "yes"}, "setJavaScriptEnabled"),
+        ({"emulateMediaType": ""}, "emulateMediaType"),
+        ({"rejectRequestPattern": [""]}, "rejectRequestPattern"),
+        ({"allowResourceTypes": ["not-a-resource"]}, "allowResourceTypes"),
+    ],
+)
+async def test_content_rejects_invalid_raw_canonical_options(client, options, message):
+    with pytest.raises(ValueError, match=message):
+        await client.content("https://example.com", **options)
+
+
+@pytest.mark.asyncio
+async def test_content_forwards_valid_raw_canonical_options(client):
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/content").mock(
+            return_value=httpx.Response(200, text="<html/>")
+        )
+        await client.content(
+            "https://example.com",
+            waitForSelector={"selector": "#app", "timeout": 120_000, "visible": True},
+            actionTimeout=120_000,
+            waitForTimeout=120_000,
+            gotoOptions={"referer": "https://example.com/source"},
+            viewport={"width": 1280, "height": 720, "deviceScaleFactor": 2},
+            bestAttempt=True,
+            setJavaScriptEnabled=False,
+            emulateMediaType="screen",
+            rejectRequestPattern=["*.png"],
+            allowResourceTypes=["document", "xhr"],
+        )
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["waitForSelector"]["selector"] == "#app"
+    assert sent["actionTimeout"] == 120_000
+    assert sent["waitForTimeout"] == 120_000
+    assert sent["viewport"]["width"] == 1280
+    assert sent["bestAttempt"] is True
+
+
 # ---------------------------------------------------------------------------
 # screenshot()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_screenshot_returns_bytes(client):
@@ -102,25 +242,45 @@ async def test_screenshot_passes_opts(client):
     assert sent["height"] == 720
 
 
+@pytest.mark.asyncio
+async def test_screenshot_rejects_malformed_worker_bytes(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/screenshot").mock(
+            return_value=httpx.Response(200, content=b"not-an-image")
+        )
+        with pytest.raises(CFBrowserError, match="malformed screenshot") as exc_info:
+            await client.screenshot("https://example.com")
+    assert exc_info.value.status_code == 502
+
+
 # ---------------------------------------------------------------------------
 # pdf()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_pdf_returns_bytes(client):
     pdf_bytes = b"%PDF-1.4" + b"\x00" * 10
     with respx.mock:
-        respx.post(f"{BASE_URL}/pdf").mock(
-            return_value=httpx.Response(200, content=pdf_bytes)
-        )
+        respx.post(f"{BASE_URL}/pdf").mock(return_value=httpx.Response(200, content=pdf_bytes))
         result = await client.pdf("https://example.com")
     assert isinstance(result, bytes)
     assert result == pdf_bytes
 
 
+@pytest.mark.asyncio
+async def test_pdf_rejects_malformed_worker_bytes(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/pdf").mock(return_value=httpx.Response(200, content=b"not-a-pdf"))
+        with pytest.raises(CFBrowserError, match="malformed PDF") as exc_info:
+            await client.pdf("https://example.com")
+    assert exc_info.value.status_code == 502
+
+
 # ---------------------------------------------------------------------------
 # markdown()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_markdown_returns_string(client):
@@ -137,21 +297,52 @@ async def test_markdown_returns_string(client):
 # snapshot()
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_snapshot_returns_dict(client):
     payload = {"html": "<html/>", "screenshot": "base64data"}
     with respx.mock:
-        respx.post(f"{BASE_URL}/snapshot").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        respx.post(f"{BASE_URL}/snapshot").mock(return_value=httpx.Response(200, json=payload))
         result = await client.snapshot("https://example.com")
     assert isinstance(result, dict)
     assert result["html"] == "<html/>"
 
 
+@pytest.mark.asyncio
+async def test_snapshot_rejects_non_object_response(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/snapshot").mock(
+            return_value=httpx.Response(200, json=["wrong shape"])
+        )
+        with pytest.raises(CFBrowserError, match="malformed snapshot"):
+            await client.snapshot("https://example.com")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "path"),
+    [("snapshot", "/snapshot"), ("content", "/content")],
+)
+async def test_http_200_failure_envelope_raises_bounded_typed_error(client, method_name, path):
+    message = "upstream failed: " + "x" * 10_000
+    with respx.mock:
+        respx.post(f"{BASE_URL}{path}").mock(
+            return_value=httpx.Response(
+                200,
+                json={"success": False, "errors": [{"message": message}]},
+            )
+        )
+        with pytest.raises(CFBrowserError) as exc_info:
+            await getattr(client, method_name)("https://example.com")
+    assert exc_info.value.status_code == 502
+    assert str(exc_info.value).startswith("upstream failed")
+    assert len(str(exc_info.value)) <= 2_048
+
+
 # ---------------------------------------------------------------------------
 # scrape()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_scrape_returns_dict(client):
@@ -172,13 +363,12 @@ async def test_scrape_returns_dict(client):
 # json_extract()
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_json_extract_returns_dict(client):
     payload = {"name": "John", "age": 30}
     with respx.mock:
-        route = respx.post(f"{BASE_URL}/json").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        route = respx.post(f"{BASE_URL}/json").mock(return_value=httpx.Response(200, json=payload))
         result = await client.json_extract("https://example.com", prompt="Extract name and age")
     assert isinstance(result, dict)
     assert result["name"] == "John"
@@ -186,17 +376,57 @@ async def test_json_extract_returns_dict(client):
     assert sent["prompt"] == "Extract name and age"
 
 
+@pytest.mark.asyncio
+async def test_json_extract_returns_page_data_with_a_success_false_field(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/json").mock(
+            return_value=httpx.Response(200, json={"success": False, "message": "Declined"})
+        )
+        result = await client.json_extract("https://example.com", prompt="Extract payment state")
+    assert result == {"success": False, "message": "Declined"}
+
+
+@pytest.mark.asyncio
+async def test_json_extract_maps_schema_alias_to_response_format(client):
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/json").mock(
+            return_value=httpx.Response(200, json={"name": "John"})
+        )
+        await client.json_extract("https://example.com", schema=schema)
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["response_format"] == {
+        "type": "json_schema",
+        "json_schema": schema,
+    }
+    assert "schema" not in sent
+
+
+@pytest.mark.asyncio
+async def test_json_extract_requires_prompt_or_schema(client):
+    with pytest.raises(ValueError, match="prompt, response_format, or schema"):
+        await client.json_extract("https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_json_extract_rejects_malformed_response_format(client):
+    with pytest.raises(ValueError, match="type=json_schema"):
+        await client.json_extract(
+            "https://example.com",
+            response_format={"type": "json_schema"},
+        )
+
+
 # ---------------------------------------------------------------------------
 # links()
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_links_returns_list(client):
     payload = ["https://a.com", "https://b.com"]
     with respx.mock:
-        respx.post(f"{BASE_URL}/links").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        respx.post(f"{BASE_URL}/links").mock(return_value=httpx.Response(200, json=payload))
         result = await client.links("https://example.com")
     assert isinstance(result, list)
     assert len(result) == 2
@@ -208,13 +438,12 @@ async def test_links_returns_list(client):
 # a11y()
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_a11y_returns_dict(client):
     payload = {"url": "https://example.com", "title": "Example", "nodes": []}
     with respx.mock:
-        respx.post(f"{BASE_URL}/a11y").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        respx.post(f"{BASE_URL}/a11y").mock(return_value=httpx.Response(200, json=payload))
         result = await client.a11y("https://example.com")
     assert isinstance(result, dict)
     assert result["title"] == "Example"
@@ -234,6 +463,7 @@ async def test_a11y_sends_wait_for(client):
 # ---------------------------------------------------------------------------
 # Cookies and headers support
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_cookies_forwarded_in_body(client):
@@ -281,6 +511,7 @@ async def test_cookies_and_headers_together(client):
 # crawl() and crawl_status()
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_crawl_raises_on_missing_job_id(client):
     with respx.mock:
@@ -292,29 +523,169 @@ async def test_crawl_raises_on_missing_job_id(client):
 
 
 @pytest.mark.asyncio
+async def test_crawl_rejects_non_string_job_id(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/crawl").mock(return_value=httpx.Response(200, json={"job_id": 123}))
+        with pytest.raises(CFBrowserError, match="missing job_id"):
+            await client.crawl("https://example.com")
+
+
+@pytest.mark.asyncio
 async def test_crawl_returns_job_id(client):
     with respx.mock:
-        respx.post(f"{BASE_URL}/crawl").mock(
+        route = respx.post(f"{BASE_URL}/crawl").mock(
             return_value=httpx.Response(200, json={"job_id": "abc-123"})
         )
         job_id = await client.crawl("https://example.com")
     assert job_id == "abc-123"
+    assert json.loads(route.calls[0].request.content) == {
+        "url": "https://example.com",
+        "render": True,
+        "source": "all",
+        "options": {
+            "includeExternalLinks": False,
+            "includeSubdomains": False,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"no_cache": True}, {"no_cache": True}),
+        ({"no_cache": True, "cache_ttl": 0}, {"no_cache": True, "cache_ttl": 0}),
+        ({"cache_ttl": 0}, {"cache_ttl": 0}),
+        ({"cache_ttl": 86_400}, {"cache_ttl": 86_400}),
+    ],
+)
+async def test_worker_crawl_forwards_validated_cache_controls(client, kwargs, expected):
+    with respx.mock:
+        route = respx.post(f"{BASE_URL}/crawl").mock(
+            return_value=httpx.Response(202, json={"job_id": "job-cache"})
+        )
+        await client.crawl("https://example.com", **kwargs)
+    sent = json.loads(route.calls[0].request.content)
+    assert {key: sent[key] for key in expected} == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_ttl", [-1, 86_401, True, 1.5])
+async def test_worker_crawl_rejects_invalid_cache_ttl(client, cache_ttl):
+    with pytest.raises(ValueError, match="cache_ttl must be an integer"):
+        await client.crawl("https://example.com", cache_ttl=cache_ttl)
+
+
+@pytest.mark.asyncio
+async def test_worker_crawl_rejects_conflicting_cache_controls(client):
+    with pytest.raises(ValueError, match="either no_cache=True or cache_ttl"):
+        await client.crawl("https://example.com", no_cache=True, cache_ttl=1)
 
 
 @pytest.mark.asyncio
 async def test_crawl_status_returns_dict(client):
     payload = {"job_id": "abc-123", "status": "running"}
     with respx.mock:
-        respx.get(f"{BASE_URL}/crawl/abc-123").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
+        respx.get(f"{BASE_URL}/crawl/abc-123").mock(return_value=httpx.Response(200, json=payload))
         result = await client.crawl_status("abc-123")
     assert result["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_crawl_status_rejects_malformed_worker_response(client):
+    with respx.mock:
+        respx.get(f"{BASE_URL}/crawl/abc-123").mock(
+            return_value=httpx.Response(200, json={"job_id": "abc-123", "status": 42})
+        )
+        with pytest.raises(CFBrowserError, match="malformed crawl status") as exc_info:
+            await client.crawl_status("abc-123")
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_crawl_status_rejects_non_object_records(client):
+    with respx.mock:
+        respx.get(f"{BASE_URL}/crawl/abc-123").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "abc-123",
+                    "status": "completed",
+                    "records": [{"url": "https://example.com"}, None],
+                },
+            )
+        )
+        with pytest.raises(CFBrowserError, match="malformed crawl status") as exc_info:
+            await client.crawl_status("abc-123")
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_crawl_status_forwards_pagination_filters(client):
+    payload = {"job_id": "abc-123", "status": "completed", "records": []}
+    with respx.mock:
+        route = respx.get(
+            f"{BASE_URL}/crawl/abc-123?cursor=opaque-next&limit=25&status=completed"
+        ).mock(return_value=httpx.Response(200, json=payload))
+        await client.crawl_status("abc-123", cursor="opaque-next", limit=25, status="completed")
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_crawl_status_forwards_numeric_cursor(client):
+    payload = {"job_id": "abc-123", "status": "completed", "records": []}
+    with respx.mock:
+        route = respx.get(f"{BASE_URL}/crawl/abc-123?cursor=10").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        await client.crawl_status("abc-123", cursor=10)
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_crawl_status_and_delete_reject_empty_job_id(client):
+    with pytest.raises(ValueError, match="job_id"):
+        await client.crawl_status("")
+    with pytest.raises(ValueError, match="job_id"):
+        await client.delete_crawl("")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"cursor": ""}, "cursor must be a valid opaque cursor"),
+        ({"cursor": True}, "cursor must be a valid opaque cursor"),
+        ({"cursor": -1}, "cursor must be a valid opaque cursor"),
+        ({"cursor": 9_007_199_254_740_992}, "cursor must be a valid opaque cursor"),
+        ({"limit": True}, "limit must be an integer between"),
+        ({"limit": 100_001}, "limit must be an integer between"),
+        ({"status": "running"}, "Invalid crawl record status"),
+    ],
+)
+async def test_worker_crawl_status_rejects_invalid_filters(client, kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        await client.crawl_status("abc-123", **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_successful_invalid_json_raises_typed_error(client):
+    with respx.mock:
+        respx.get(f"{BASE_URL}/crawl/abc-123", params={}).mock(
+            return_value=httpx.Response(
+                200,
+                text="not-json",
+                headers={"Content-Type": "application/json"},
+            )
+        )
+        with pytest.raises(CFBrowserError, match="invalid JSON"):
+            await client.crawl_status("abc-123")
 
 
 # ---------------------------------------------------------------------------
 # crawl_wait() - polling logic
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_crawl_wait_polls_until_complete(client):
@@ -325,20 +696,111 @@ async def test_crawl_wait_polls_until_complete(client):
         call_count += 1
         if call_count < 3:
             return httpx.Response(200, json={"job_id": "abc-123", "status": "running"})
-        return httpx.Response(200, json={"job_id": "abc-123", "status": "complete", "pages": []})
+        return httpx.Response(200, json={"job_id": "abc-123", "status": "completed"})
 
     with respx.mock:
-        respx.get(f"{BASE_URL}/crawl/abc-123").mock(side_effect=side_effect)
+        respx.get(f"{BASE_URL}/crawl/abc-123?limit=1").mock(side_effect=side_effect)
+        respx.get(f"{BASE_URL}/crawl/abc-123", params={}).mock(
+            return_value=httpx.Response(
+                200,
+                json={"job_id": "abc-123", "status": "completed", "records": []},
+            )
+        )
         result = await client.crawl_wait("abc-123", timeout=60, poll_interval=0.01)
 
-    assert result["status"] == "complete"
+    assert result["status"] == "completed"
+    assert result["records"] == []
     assert call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["next-page", 10])
+async def test_crawl_wait_collects_all_cursor_pages(client, cursor):
+    with respx.mock:
+        respx.get(f"{BASE_URL}/crawl/abc-123?limit=1").mock(
+            return_value=httpx.Response(200, json={"job_id": "abc-123", "status": "completed"})
+        )
+        next_page = respx.get(f"{BASE_URL}/crawl/abc-123", params={"cursor": cursor}).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "abc-123",
+                    "status": "completed",
+                    "records": [{"url": "https://example.com/2"}],
+                },
+            )
+        )
+        respx.get(f"{BASE_URL}/crawl/abc-123", params={}).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "abc-123",
+                    "status": "completed",
+                    "records": [{"url": "https://example.com/1"}],
+                    "cursor": cursor,
+                },
+            )
+        )
+        result = await client.crawl_wait("abc-123", timeout=60, poll_interval=0.01)
+
+    assert [record["url"] for record in result["records"]] == [
+        "https://example.com/1",
+        "https://example.com/2",
+    ]
+    assert "cursor" not in result
+    assert next_page.called
+
+
+@pytest.mark.asyncio
+async def test_crawl_wait_rejects_non_object_records_on_later_page(client):
+    with respx.mock:
+        respx.get(f"{BASE_URL}/crawl/abc-123?limit=1").mock(
+            return_value=httpx.Response(
+                200,
+                json={"job_id": "abc-123", "status": "completed"},
+            )
+        )
+        respx.get(f"{BASE_URL}/crawl/abc-123", params={"cursor": "next-page"}).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "abc-123",
+                    "status": "completed",
+                    "records": [None],
+                },
+            )
+        )
+        respx.get(f"{BASE_URL}/crawl/abc-123", params={}).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "job_id": "abc-123",
+                    "status": "completed",
+                    "records": [{"url": "https://example.com/1"}],
+                    "cursor": "next-page",
+                },
+            )
+        )
+        with pytest.raises(CFBrowserError, match="malformed crawl status") as exc_info:
+            await client.crawl_wait("abc-123", timeout=60, poll_interval=0.01)
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_crawl_wait_enforces_wall_clock_timeout(client, monkeypatch):
+    async def slow_status(_job_id, **_kwargs):
+        await asyncio.sleep(0.08)
+        return {"job_id": "abc-123", "status": "completed"}
+
+    monkeypatch.setattr(client, "crawl_status", slow_status)
+    with pytest.raises(TimeoutError):
+        await client.crawl_wait("abc-123", timeout=0.02, poll_interval=0.01)
 
 
 @pytest.mark.asyncio
 async def test_crawl_wait_raises_on_timeout(client):
     with respx.mock:
-        respx.get(f"{BASE_URL}/crawl/abc-123").mock(
+        respx.get(f"{BASE_URL}/crawl/abc-123?limit=1").mock(
             return_value=httpx.Response(200, json={"job_id": "abc-123", "status": "running"})
         )
         with pytest.raises(TimeoutError):
@@ -346,9 +808,23 @@ async def test_crawl_wait_raises_on_timeout(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout", "poll_interval", "message"),
+    [(True, 1, "timeout"), (float("inf"), 1, "timeout"), (1, float("nan"), "poll_interval")],
+)
+async def test_crawl_wait_rejects_invalid_timing(client, timeout, poll_interval, message):
+    with pytest.raises(ValueError, match=message):
+        await client.crawl_wait(
+            "abc-123",
+            timeout=timeout,
+            poll_interval=poll_interval,
+        )
+
+
+@pytest.mark.asyncio
 async def test_crawl_wait_raises_on_failed_status(client):
     with respx.mock:
-        respx.get(f"{BASE_URL}/crawl/abc-123").mock(
+        respx.get(f"{BASE_URL}/crawl/abc-123?limit=1").mock(
             return_value=httpx.Response(
                 200, json={"job_id": "abc-123", "status": "failed", "error": "Timeout"}
             )
@@ -357,9 +833,23 @@ async def test_crawl_wait_raises_on_failed_status(client):
             await client.crawl_wait("abc-123", timeout=60, poll_interval=0.01)
 
 
+@pytest.mark.asyncio
+async def test_crawl_wait_raises_on_done_failure_status(client):
+    with respx.mock:
+        respx.get(f"{BASE_URL}/crawl/abc-123?limit=1").mock(
+            return_value=httpx.Response(
+                200,
+                json={"job_id": "abc-123", "status": "cancelled_by_user"},
+            )
+        )
+        with pytest.raises(CFBrowserError, match="cancelled_by_user"):
+            await client.crawl_wait("abc-123", timeout=1, poll_interval=0.01)
+
+
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_401_raises_authentication_error(client):
@@ -392,26 +882,46 @@ async def test_500_raises_cf_browser_error(client):
 
 
 @pytest.mark.asyncio
+async def test_network_error_is_wrapped_as_transport_error(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/content").mock(side_effect=httpx.ConnectError("connection refused"))
+        with pytest.raises(TransportError, match="request failed"):
+            await client.content("https://example.com")
+
+
+@pytest.mark.asyncio
 async def test_404_raises_not_found_error(client):
     with respx.mock:
         respx.post(f"{BASE_URL}/content").mock(
             return_value=httpx.Response(404, json={"error": "Not found"})
         )
         from cf_browser.exceptions import NotFoundError
+
         with pytest.raises(NotFoundError):
             await client.content("https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_501_raises_browser_unavailable_error(client):
+    from cf_browser.exceptions import BrowserUnavailableError
+
+    with respx.mock:
+        respx.post(f"{BASE_URL}/click").mock(
+            return_value=httpx.Response(501, json={"error": "BROWSER binding unavailable"})
+        )
+        with pytest.raises(BrowserUnavailableError):
+            await client.click("https://example.com", "button")
 
 
 # ---------------------------------------------------------------------------
 # Context manager
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_context_manager():
     with respx.mock:
-        respx.post(f"{BASE_URL}/markdown").mock(
-            return_value=httpx.Response(200, text="# Test")
-        )
+        respx.post(f"{BASE_URL}/markdown").mock(return_value=httpx.Response(200, text="# Test"))
         async with CFBrowser(base_url=BASE_URL, api_key=API_KEY) as browser:
             result = await browser.markdown("https://example.com")
     assert result == "# Test"
@@ -429,6 +939,7 @@ async def test_context_manager_closes_client():
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
+
 
 def test_link_item_model():
     item = LinkItem(href="https://example.com", text="Example")
@@ -461,3 +972,10 @@ def test_crawl_result_optional_fields():
     result = CrawlResult(job_id="abc-123", status="failed", error="Timeout")
     assert result.pages is None
     assert result.error == "Timeout"
+
+
+@pytest.mark.parametrize("cursor", ["next-page", 10])
+def test_crawl_result_preserves_pagination_cursor(cursor):
+    result = CrawlResult(job_id="abc-123", status="completed", cursor=cursor)
+    assert result.cursor == cursor
+    assert result.model_dump()["cursor"] == cursor

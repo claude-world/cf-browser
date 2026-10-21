@@ -27,6 +27,12 @@ app.post("/", async (c) => {
     return c.json({ error: urlCheck.error, status: 400 }, 400);
   }
 
+  if (!Array.isArray(body.elements) || body.elements.length === 0 || !body.elements.every(
+    (element) => typeof element === "string" && element.trim().length > 0 && element.length <= 500
+  )) {
+    return c.json({ error: "elements must be a non-empty array of CSS selector strings", status: 400 }, 400);
+  }
+
   const noCache = body.no_cache === true;
   const cacheKey = await buildCacheKey("scrape", body);
 
@@ -57,6 +63,9 @@ app.post("/", async (c) => {
   }
 
   const normalized = normalizeScrapeResponse(result.data);
+  if (normalized === null) {
+    return c.json({ error: "Cloudflare returned malformed scrape data", status: 502 }, 502);
+  }
 
   if (!noCache) {
     await setCached(

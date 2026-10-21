@@ -1,7 +1,7 @@
 ---
 name: content-extractor
 description: Extract structured content from web pages using CF Browser MCP tools
-user_invocable: true
+user-invocable: true
 ---
 
 # Content Extractor
@@ -10,7 +10,7 @@ Extract content from JavaScript-rendered web pages using CF Browser MCP tools.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
+CF Browser MCP server must be configured (see the [CF Browser quick start](https://github.com/claude-world/cf-browser#quick-start)).
 
 ## Modes
 
@@ -53,8 +53,8 @@ Analyze the user's intent and select the appropriate mode:
 **Tool**: `browser_screenshot`
 **Workflow**:
 1. Call `browser_screenshot` with URL and optional viewport dimensions
-2. Return file path to saved PNG
-3. Read the image to show the user
+2. Read the returned private temporary PNG path to inspect/show the image
+3. If persistence is requested, copy it to the requested output before the MCP process exits
 
 ## Output Format
 

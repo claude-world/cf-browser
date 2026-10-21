@@ -1,5 +1,5 @@
 """
-CF Browser SDK - Python async client for Cloudflare Browser Rendering.
+CF Browser SDK - Python async client for Cloudflare Browser Run.
 
 Two modes of operation:
 
@@ -24,13 +24,19 @@ Two modes of operation:
         md = await browser.markdown("https://example.com")
 """
 
+__version__ = "2.1.0"
+
 from .client import CFBrowser
 from .direct import CFBrowserDirect
 from .exceptions import (
     AuthenticationError,
+    BrowserUnavailableError,
     CFBrowserError,
+    CrawlJobError,
+    CrawlResultsTimeoutError,
     NotFoundError,
     RateLimitError,
+    TransportError,
 )
 from .models import (
     ClickResult,
@@ -45,12 +51,18 @@ from .models import (
 )
 
 __all__ = [
+    # Metadata
+    "__version__",
     # Client
     "CFBrowser",
     "CFBrowserDirect",
     # Exceptions
     "CFBrowserError",
     "AuthenticationError",
+    "BrowserUnavailableError",
+    "CrawlJobError",
+    "CrawlResultsTimeoutError",
+    "TransportError",
     "RateLimitError",
     "NotFoundError",
     # Models

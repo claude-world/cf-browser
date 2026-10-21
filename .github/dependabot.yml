@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /worker
+    schedule:
+      interval: monthly
+    groups:
+      worker-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directories:
+      - /sdk
+      - /mcp-server
+    schedule:
+      interval: monthly
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

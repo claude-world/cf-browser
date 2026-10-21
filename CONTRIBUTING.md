@@ -2,17 +2,17 @@
 
 ## Scope
 
-This repo has two main contributor surfaces:
+This repo has three main contributor surfaces:
 
 - `worker/`: Cloudflare Worker proxy built with TypeScript, Hono, Wrangler, and Vitest
 - `sdk/`: Python SDK built with `httpx`, `pydantic`, `pytest`, and `respx`
-- `mcp-server/`: FastMCP wrapper around the SDK with its own pytest suite
+- `mcp-server/`: MCP server (official `mcp` 2.x SDK) wrapping the SDK, with its own pytest suite
 
 Keep changes focused, add or update tests for behavior changes, and avoid committing secrets or generated credentials.
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22+ (CI also verifies Node 24 and 26)
 - Python 3.10+
 - Cloudflare account and `wrangler login` if you are working on deployed Worker behavior
 
@@ -20,7 +20,7 @@ Keep changes focused, add or update tests for behavior changes, and avoid commit
 
 ```bash
 cd worker
-npm install
+npm ci
 cp wrangler.toml.example wrangler.toml
 ```
 
@@ -37,6 +37,7 @@ Before opening a PR for Worker changes, run:
 ```bash
 npm run type-check
 npm test
+npm audit --audit-level=high
 ```
 
 ## SDK Development
@@ -51,7 +52,9 @@ pip install -e ".[dev]"
 Run tests with:
 
 ```bash
-pytest tests/ -v
+ruff check src tests
+mypy src
+pytest tests/ -q
 ```
 
 ## MCP Server Development
@@ -62,7 +65,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ../sdk
 pip install -e ".[dev]"
-pytest tests/ -v
+ruff check src tests
+mypy src
+pytest tests/ -q
 ```
 
 ## Code Style
@@ -79,8 +84,8 @@ pytest tests/ -v
 1. Create a branch from `main`.
 2. Make the smallest change that resolves the issue.
 3. Run the relevant checks:
-   - `cd worker && npm run type-check && npm test`
-   - `cd sdk && pytest tests/ -v`
-   - `cd mcp-server && pytest tests/ -v`
+   - `cd worker && npm audit --audit-level=high && npm run type-check && npm test`
+   - `ruff check sdk/src sdk/tests examples && mypy --config-file sdk/pyproject.toml sdk/src && pytest -q sdk/tests`
+   - `ruff check mcp-server/src mcp-server/tests && mypy --config-file mcp-server/pyproject.toml mcp-server/src && pytest -q mcp-server/tests`
 4. Update docs if setup, behavior, or API usage changed.
 5. Open a PR with a clear summary, linked issue, and test notes.

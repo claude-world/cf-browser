@@ -1,7 +1,7 @@
 /**
  * Puppeteer lifecycle helper for interaction routes.
  *
- * Launches a browser via the Workers Browser Rendering binding,
+ * Launches a browser via the Workers Browser Run binding,
  * applies common page settings (viewport, user agent, headers, cookies),
  * navigates to the target URL, and hands the page to a callback.
  *
@@ -11,21 +11,45 @@ import puppeteer, {
   type Browser,
   type Page,
   type HTTPRequest,
+  type Target,
 } from "@cloudflare/puppeteer";
 import type { Env, BaseRequestBody, CookieParam, ScriptTag, StyleTag } from "../types.js";
 import { validateUrlWithDns } from "./validate-url.js";
 
 type NavigationWaitUntil = "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 
+type BrowserRequestBody = BaseRequestBody & {
+  goto_options?: {
+    timeout?: number;
+    waitUntil?: NavigationWaitUntil | NavigationWaitUntil[];
+    referer?: string;
+    referrerPolicy?: string;
+  };
+  wait_for_selector?: {
+    selector: string;
+    timeout?: number;
+    hidden?: boolean;
+    visible?: boolean;
+  };
+  viewport?: {
+    width?: number;
+    height?: number;
+    deviceScaleFactor?: number;
+    hasTouch?: boolean;
+    isLandscape?: boolean;
+    isMobile?: boolean;
+  };
+};
+
 /**
  * Safely extract known BaseRequestBody fields from a raw JSON object,
  * eliminating `body as any` casts in route handlers.
  */
-export function toBaseBody(raw: Record<string, unknown>): BaseRequestBody {
+export function toBaseBody(raw: Record<string, unknown>): BrowserRequestBody {
   if (typeof raw.url !== "string" || !raw.url) {
     throw new Error("toBaseBody: missing or invalid url field");
   }
-  const body: BaseRequestBody = { url: raw.url };
+  const body: BrowserRequestBody = { url: raw.url };
   if (typeof raw.wait_for === "string") body.wait_for = raw.wait_for;
   if (typeof raw.wait_until === "string") body.wait_until = raw.wait_until;
   if (typeof raw.user_agent === "string") body.user_agent = raw.user_agent;
@@ -39,6 +63,27 @@ export function toBaseBody(raw: Record<string, unknown>): BaseRequestBody {
   if (Array.isArray(raw.add_script_tag)) body.add_script_tag = raw.add_script_tag as ScriptTag[];
   if (Array.isArray(raw.add_style_tag)) body.add_style_tag = raw.add_style_tag as StyleTag[];
   if (Array.isArray(raw.reject_resource_types)) body.reject_resource_types = raw.reject_resource_types as string[];
+  if (raw.gotoOptions && typeof raw.gotoOptions === "object" && !Array.isArray(raw.gotoOptions)) {
+    body.goto_options = raw.gotoOptions as BrowserRequestBody["goto_options"];
+  }
+  if (
+    raw.waitForSelector && typeof raw.waitForSelector === "object" &&
+    !Array.isArray(raw.waitForSelector)
+  ) {
+    body.wait_for_selector = raw.waitForSelector as BrowserRequestBody["wait_for_selector"];
+  }
+  if (raw.viewport && typeof raw.viewport === "object" && !Array.isArray(raw.viewport)) {
+    body.viewport = raw.viewport as BrowserRequestBody["viewport"];
+  }
+  if (typeof raw.userAgent === "string") body.user_agent = raw.userAgent;
+  if (raw.setExtraHTTPHeaders && typeof raw.setExtraHTTPHeaders === "object") {
+    body.headers = raw.setExtraHTTPHeaders as Record<string, string>;
+  }
+  if (Array.isArray(raw.addScriptTag)) body.add_script_tag = raw.addScriptTag as ScriptTag[];
+  if (Array.isArray(raw.addStyleTag)) body.add_style_tag = raw.addStyleTag as StyleTag[];
+  if (Array.isArray(raw.rejectResourceTypes)) {
+    body.reject_resource_types = raw.rejectResourceTypes as string[];
+  }
   return body;
 }
 
@@ -49,6 +94,14 @@ export class BrowserBindingUnavailable extends Error {
         "Read-only endpoints work without it."
     );
     this.name = "BrowserBindingUnavailable";
+  }
+}
+
+/** The target, or a redirect it followed, resolves to a blocked destination. */
+export class BlockedNavigationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BlockedNavigationError";
   }
 }
 
@@ -71,9 +124,17 @@ export async function performActionAndWaitForNavigation<T>(
 async function handleInterceptedRequest(
   req: HTTPRequest,
   dnsCache: Map<string, Promise<string[]>>,
+  rejectedResourceTypes: ReadonlySet<string>,
+  onBlocked: (reason: string) => void,
 ): Promise<void> {
+  if (rejectedResourceTypes.has(req.resourceType())) {
+    await req.abort("blockedbyclient");
+    return;
+  }
+
   const check = await validateUrlWithDns(req.url(), dnsCache);
   if (!check.valid) {
+    onBlocked(check.error);
     await req.abort("blockedbyclient");
     return;
   }
@@ -87,19 +148,50 @@ async function handleInterceptedRequest(
  */
 export async function withBrowser<T>(
   env: Env,
-  body: BaseRequestBody,
+  body: BrowserRequestBody,
   callback: (ctx: BrowserContext) => Promise<T>,
 ): Promise<T> {
   if (!env.BROWSER) {
     throw new BrowserBindingUnavailable();
   }
 
+  // Resolve the target before spending a browser session, matching the DNS
+  // check Quick Actions apply before forwarding a URL.
+  const dnsCache = new Map<string, Promise<string[]>>();
+  const target = await validateUrlWithDns(body.url, dnsCache);
+  if (!target.valid) {
+    throw new BlockedNavigationError(target.error);
+  }
+
   const browser = await puppeteer.launch(env.BROWSER);
   try {
     const page = await browser.newPage();
 
+    // Service workers and popups issue requests outside this page's request
+    // interception: bypass the former and close the latter as soon as they open.
+    await page.setBypassServiceWorker(true);
+    browser.on("targetcreated", (created: Target) => {
+      if (created.type() !== "page") return;
+      void created.page()
+        .then(async (opened) => {
+          if (opened && opened !== page) await opened.close();
+        })
+        .catch(() => undefined);
+    });
+
     // Viewport
-    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setViewport({
+      width: body.viewport?.width ?? 1920,
+      height: body.viewport?.height ?? 1080,
+      ...(body.viewport?.deviceScaleFactor !== undefined
+        ? { deviceScaleFactor: body.viewport.deviceScaleFactor }
+        : {}),
+      ...(body.viewport?.hasTouch !== undefined ? { hasTouch: body.viewport.hasTouch } : {}),
+      ...(body.viewport?.isLandscape !== undefined
+        ? { isLandscape: body.viewport.isLandscape }
+        : {}),
+      ...(body.viewport?.isMobile !== undefined ? { isMobile: body.viewport.isMobile } : {}),
+    });
 
     // User agent
     if (body.user_agent) {
@@ -132,10 +224,16 @@ export async function withBrowser<T>(
     }
 
     // SSRF protection: intercept requests to block redirects to private IPs
-    const dnsCache = new Map<string, Promise<string[]>>();
+    const rejectedResourceTypes = new Set(body.reject_resource_types ?? []);
+    let blockedNavigation: string | undefined;
     await page.setRequestInterception(true);
     page.on("request", (req) => {
-      void handleInterceptedRequest(req, dnsCache).catch(async () => {
+      const onBlocked = (reason: string) => {
+        if (req.isNavigationRequest() && req.frame() === page.mainFrame()) {
+          blockedNavigation ??= reason;
+        }
+      };
+      void handleInterceptedRequest(req, dnsCache, rejectedResourceTypes, onBlocked).catch(async () => {
         try {
           await req.abort("blockedbyclient");
         } catch {
@@ -145,13 +243,36 @@ export async function withBrowser<T>(
     });
 
     // Navigate
-    const waitUntil = (body.wait_until as NavigationWaitUntil) ?? "load";
-    const timeout = body.timeout ?? 30_000;
-    await page.goto(body.url, { waitUntil, timeout });
+    const gotoOptions = {
+      ...body.goto_options,
+      waitUntil: (body.wait_until as NavigationWaitUntil | undefined) ??
+        body.goto_options?.waitUntil ?? "load",
+      timeout: body.timeout ?? body.goto_options?.timeout ?? 30_000,
+    };
+    try {
+      await page.goto(body.url, gotoOptions);
+    } catch (error) {
+      if (blockedNavigation) throw new BlockedNavigationError(blockedNavigation);
+      throw error;
+    }
+
+    // Match the Quick Actions contract for resources injected after navigation.
+    for (const tag of body.add_script_tag ?? []) {
+      await page.addScriptTag(tag);
+    }
+    for (const tag of body.add_style_tag ?? []) {
+      await page.addStyleTag(tag);
+    }
 
     // Wait for optional selector
-    if (body.wait_for) {
-      await page.waitForSelector(body.wait_for, { timeout });
+    const waitForSelector = body.wait_for_selector ??
+      (body.wait_for ? { selector: body.wait_for } : undefined);
+    if (waitForSelector) {
+      const { selector, ...selectorOptions } = waitForSelector;
+      await page.waitForSelector(selector, {
+        ...selectorOptions,
+        timeout: selectorOptions.timeout ?? gotoOptions.timeout,
+      });
     }
 
     return await callback({ page, browser });

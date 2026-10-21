@@ -1,0 +1,14 @@
+title = "cf-browser gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local environments, build outputs, and ignored development secrets"
+paths = [
+  '''(^|/)(sdk|mcp-server)/\.venv/''',
+  '''(^|/)worker/node_modules/''',
+  '''(^|/)(sdk|mcp-server)/dist/''',
+  '''(^|/)worker/\.dev\.vars$''',
+  '''(^|/)\.pymon$''',
+]

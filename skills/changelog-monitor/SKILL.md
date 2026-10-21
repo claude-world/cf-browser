@@ -1,7 +1,7 @@
 ---
 name: changelog-monitor
 description: Monitor release notes and changelogs from any software project via its web page
-user_invocable: true
+user-invocable: true
 ---
 
 # Changelog Monitor
@@ -10,7 +10,7 @@ Track releases, changelogs, and breaking changes from any software project's web
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
+CF Browser MCP server must be configured (see the [CF Browser quick start](https://github.com/claude-world/cf-browser#quick-start)).
 
 ## Why This Skill?
 
@@ -71,7 +71,7 @@ Output a structured summary:
 
 - `url` or `project` (required): GitHub repo, npm package name, or direct changelog URL
 - `count` (optional, default=5): Number of releases to fetch
-- `watch` (optional): If set, compare against last known version and highlight new releases
+- `baseline_version` (optional): Compare against a version supplied by the user or already recorded in the current workspace. This skill does not create a persistent scheduler by itself.
 
 ## Examples
 

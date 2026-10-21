@@ -9,6 +9,10 @@ const TTL = 60 * 5; // 5 minutes — a11y trees reflect live DOM state
 
 const app = new Hono<AppEnv>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 app.post("/", async (c) => {
   let body: Record<string, unknown>;
   try {
@@ -42,16 +46,17 @@ app.post("/", async (c) => {
   const { no_cache: _skip, ...cfBody } = body;
   const cfPayload = mapToCfParams(cfBody);
 
-  // Use the /snapshot endpoint which returns structured DOM data
-  const result = await api.snapshot(cfPayload);
+  const result = await api.accessibilityTree(cfPayload);
 
   if (!result.ok) {
     return c.json({ error: result.message, status: result.status }, result.status as 502);
   }
 
-  // Extract a structured accessibility-oriented view from the snapshot
-  const snapshot = result.data as Record<string, unknown>;
-  const a11yData = extractA11yData(snapshot);
+  const upstream = result.data;
+  if (!isRecord(upstream)) {
+    return c.json({ error: "Cloudflare returned malformed accessibility tree data", status: 502 }, 502);
+  }
+  const a11yData = { ...upstream, type: "accessibility_tree" };
 
   if (!noCache) {
     await setCached(
@@ -67,24 +72,5 @@ app.post("/", async (c) => {
   c.header("X-Cache", "MISS");
   return c.json(a11yData);
 });
-
-/**
- * Extract accessibility-relevant data from a CF snapshot response.
- *
- * The CF Browser Rendering /snapshot endpoint returns page data including
- * the rendered DOM. We wrap it with metadata indicating this is an
- * accessibility-oriented extraction, stripping binary data (screenshots)
- * to reduce token cost for LLM consumers.
- */
-function extractA11yData(snapshot: Record<string, unknown>): Record<string, unknown> {
-  // Remove the base64 screenshot to cut token cost — the main value
-  // of the a11y endpoint is structured text without binary bloat.
-  const { screenshot: _screenshot, ...textData } = snapshot;
-
-  return {
-    type: "accessibility_snapshot",
-    ...textData,
-  };
-}
 
 export default app;

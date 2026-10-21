@@ -10,41 +10,50 @@ Prerequisites:
 
 import asyncio
 import os
+from urllib.parse import urlsplit
 
 from cf_browser import CFBrowser
 
 
 async def main():
-    url = os.environ.get("CF_BROWSER_URL", "https://cf-browser.example.workers.dev")
-    key = os.environ.get("CF_BROWSER_API_KEY", "your-api-key")
+    required = [
+        "CF_BROWSER_URL",
+        "CF_BROWSER_API_KEY",
+        "CF_BROWSER_AUTH_URL",
+        "CF_BROWSER_SESSION_COOKIE",
+    ]
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise SystemExit(
+            f"Set the required environment variables: {', '.join(missing)}"
+        )
+    url = os.environ["CF_BROWSER_URL"]
+    key = os.environ["CF_BROWSER_API_KEY"]
+    target_url = os.environ["CF_BROWSER_AUTH_URL"]
+    parsed_target = urlsplit(target_url)
+    if parsed_target.scheme not in {"http", "https"} or not parsed_target.hostname:
+        raise SystemExit("CF_BROWSER_AUTH_URL must be an absolute HTTP(S) URL")
+    target_host = parsed_target.hostname
 
     async with CFBrowser(base_url=url, api_key=key) as browser:
         # Example: Scrape a page that requires authentication cookies
         cookies = [
             {
                 "name": "session_id",
-                "value": "your-session-cookie-value",
-                "domain": ".example.com",
+                "value": os.environ["CF_BROWSER_SESSION_COOKIE"],
+                "domain": target_host,
                 "path": "/",
                 "secure": True,
                 "httpOnly": True,
             },
-            {
-                "name": "auth_token",
-                "value": "your-auth-token",
-                "domain": ".example.com",
-            },
         ]
 
         # Custom headers (e.g., for API-based auth)
-        headers = {
-            "X-Custom-Auth": "bearer some-token",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
+        headers = {"Accept-Language": "en-US,en;q=0.9"}
 
         # Fetch authenticated page as markdown
         md = await browser.markdown(
-            "https://example.com/dashboard",
+            target_url,
             cookies=cookies,
             headers=headers,
         )
@@ -52,12 +61,17 @@ async def main():
 
         # Take screenshot of authenticated page
         png = await browser.screenshot(
-            "https://example.com/dashboard",
+            target_url,
             cookies=cookies,
             width=1440,
             height=900,
         )
-        with open("dashboard-screenshot.png", "wb") as f:
+        # The page is authenticated, so keep the capture private (0600) and never
+        # write through an existing file or symlink.
+        fd = os.open(
+            "dashboard-screenshot.png", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        with os.fdopen(fd, "wb") as f:
             f.write(png)
         print(f"Saved: dashboard-screenshot.png ({len(png)} bytes)")
 

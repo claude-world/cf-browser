@@ -26,6 +26,46 @@ app.post("/", async (c) => {
     return c.json({ error: urlCheck.error, status: 400 }, 400);
   }
 
+  if (body.width !== undefined && (
+    typeof body.width !== "number" || !Number.isSafeInteger(body.width) ||
+    body.width < 1 || body.width > 7680
+  )) {
+    return c.json({ error: "width must be an integer between 1 and 7680", status: 400 }, 400);
+  }
+  if (body.height !== undefined && (
+    typeof body.height !== "number" || !Number.isSafeInteger(body.height) ||
+    body.height < 1 || body.height > 4320
+  )) {
+    return c.json({ error: "height must be an integer between 1 and 4320", status: 400 }, 400);
+  }
+  if (body.full_page !== undefined && typeof body.full_page !== "boolean") {
+    return c.json({ error: "full_page must be a boolean", status: 400 }, 400);
+  }
+  for (const option of ["viewport", "screenshotOptions"] as const) {
+    if (
+      body[option] !== undefined &&
+      (typeof body[option] !== "object" || body[option] === null || Array.isArray(body[option]))
+    ) {
+      return c.json({ error: `${option} must be an object`, status: 400 }, 400);
+    }
+  }
+  if (
+    body.screenshotOptions &&
+    typeof body.screenshotOptions === "object" &&
+    (body.screenshotOptions as Record<string, unknown>).encoding !== undefined &&
+    (body.screenshotOptions as Record<string, unknown>).encoding !== "binary"
+  ) {
+    return c.json({ error: "screenshotOptions.encoding must be binary", status: 400 }, 400);
+  }
+  if (
+    body.screenshotOptions &&
+    typeof body.screenshotOptions === "object" &&
+    (body.screenshotOptions as Record<string, unknown>).fullPage !== undefined &&
+    typeof (body.screenshotOptions as Record<string, unknown>).fullPage !== "boolean"
+  ) {
+    return c.json({ error: "screenshotOptions.fullPage must be a boolean", status: 400 }, 400);
+  }
+
   const noCache = body.no_cache === true;
   const cacheKey = await buildCacheKey("screenshot", body);
 
@@ -38,32 +78,24 @@ app.post("/", async (c) => {
     }
   }
 
-  // Validate viewport dimensions
-  if (body.width !== undefined) {
-    const w = Number(body.width);
-    if (!Number.isFinite(w) || w < 1 || w > 7680) {
-      return c.json({ error: "width must be between 1 and 7680", status: 400 }, 400);
-    }
-  }
-  if (body.height !== undefined) {
-    const h = Number(body.height);
-    if (!Number.isFinite(h) || h < 1 || h > 4320) {
-      return c.json({ error: "height must be between 1 and 4320", status: 400 }, 400);
-    }
-  }
-
   const api = new CfBrowserApi(c.env.CF_ACCOUNT_ID, c.env.CF_API_TOKEN);
   const { no_cache: _skip, width, height, full_page, ...cfBody } = body;
 
   // Map user-friendly params → CF API nested format
   if (width || height) {
     cfBody.viewport = {
-      width: (width as number) ?? 1920,
-      height: (height as number) ?? 1080,
+      ...((cfBody.viewport as Record<string, unknown> | undefined) ?? {}),
+      width: (width as number | undefined) ??
+        (cfBody.viewport as Record<string, unknown> | undefined)?.width ?? 1920,
+      height: (height as number | undefined) ??
+        (cfBody.viewport as Record<string, unknown> | undefined)?.height ?? 1080,
     };
   }
-  if (full_page) {
-    cfBody.screenshotOptions = { fullPage: true };
+  if (full_page !== undefined) {
+    cfBody.screenshotOptions = {
+      ...((cfBody.screenshotOptions as Record<string, unknown> | undefined) ?? {}),
+      fullPage: full_page,
+    };
   }
 
   const cfPayload = mapToCfParams(cfBody);

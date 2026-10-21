@@ -1,23 +1,23 @@
 # cf-browser-mcp
 
-MCP Server with 15 browser tools for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — powered by [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/).
+MCP server (built on the official `mcp` 2.x Python SDK) exposing **17 Cloudflare Browser Run tools** (formerly Browser Rendering) to Claude Code and other MCP clients. Requires Python 3.10+.
 
-## Installation
+## Install
 
 ```bash
-pip install cf-browser-mcp
+python -m pip install cf-browser-mcp
 ```
 
-## Setup
+## Configure
 
-Add to your `.mcp.json`. Two modes are supported:
+Set `CF_BROWSER_MODE` explicitly when both credential pairs might exist.
 
-| Mode | Available tools | Best for |
-|------|-----------------|----------|
-| Direct Mode | 10 read-only tools | Personal use, no Worker deployment |
-| Worker Mode | All 15 tools | Teams, cached usage, browser interaction |
+| Mode | Credentials | Tools |
+|---|---|---|
+| `direct` | `CF_ACCOUNT_ID`, `CF_API_TOKEN` | 12 read/crawl tools |
+| `worker` | `CF_BROWSER_URL`, `CF_BROWSER_API_KEY` | All 17 tools |
 
-### Direct Mode (no Worker needed)
+Use environment expansion so secrets do not live in a project file:
 
 ```json
 {
@@ -27,72 +27,44 @@ Add to your `.mcp.json`. Two modes are supported:
       "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
-        "CF_ACCOUNT_ID": "your-cloudflare-account-id",
-        "CF_API_TOKEN": "your-cloudflare-api-token"
+        "CF_BROWSER_MODE": "${CF_BROWSER_MODE}",
+        "CF_BROWSER_URL": "${CF_BROWSER_URL}",
+        "CF_BROWSER_API_KEY": "${CF_BROWSER_API_KEY}"
       }
     }
   }
 }
 ```
 
-### Worker Mode (via deployed Cloudflare Worker)
-
-```json
-{
-  "mcpServers": {
-    "cf-browser": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["-m", "cf_browser_mcp.server"],
-      "env": {
-        "CF_BROWSER_URL": "https://cf-browser.YOUR-SUBDOMAIN.workers.dev",
-        "CF_BROWSER_API_KEY": "your-api-key"
-      }
-    }
-  }
-}
-```
+For Direct mode, replace the two Worker variables with `CF_ACCOUNT_ID` and `CF_API_TOKEN`. If both complete credential pairs exist and no mode is selected, startup fails instead of silently choosing one.
 
 ## Tools
 
-### Read-Only Tools
+Read/crawl tools:
 
-| Tool | Description |
-|------|-------------|
-| `browser_markdown` | Convert page to clean Markdown |
-| `browser_content` | Get fully rendered HTML |
-| `browser_screenshot` | Take a PNG screenshot |
-| `browser_pdf` | Generate PDF |
-| `browser_scrape` | Extract elements by CSS selector as `{"elements":[...]}` |
-| `browser_json` | AI-powered data extraction |
-| `browser_links` | Extract normalized `{href, text}` link objects |
-| `browser_a11y` | Accessibility-oriented snapshot with screenshot stripped |
-| `browser_crawl` | Start async multi-page crawl and return `{job_id, status}` |
-| `browser_crawl_status` | Check crawl progress |
+- `browser_content`, `browser_markdown`, `browser_screenshot`, `browser_pdf`
+- `browser_snapshot`, `browser_scrape`, `browser_json`, `browser_links`, `browser_a11y`
+- `browser_crawl`, `browser_crawl_status`, `browser_delete_crawl`
 
-### Interaction Tools (Worker Mode only)
+Worker interaction tools:
 
-| Tool | Description |
-|------|-------------|
-| `browser_click` | Click an element on a page |
-| `browser_type` | Type text into an input field |
-| `browser_evaluate` | Execute JavaScript and return result |
-| `browser_interact` | Execute a chain of browser actions |
-| `browser_submit_form` | Fill and submit a form |
+- `browser_click`, `browser_type`, `browser_evaluate`
+- `browser_interact`, `browser_submit_form`
 
-All tools accept optional `cookies` and `headers` for authenticated scraping. Most read-only tools also accept `wait_for`, `wait_until`, and `user_agent`.
+MCP input schemas accept real arrays/objects for cookies, headers, HTTP Basic authentication, actions, fields, script/style tags, and JSON response schemas. JSON-encoded strings remain accepted for compatibility. Read and interaction tools expose page controls consistently; crawls include `cache_ttl`, depth, formats, Content Signals purposes, freshness filters, URL patterns, JSON options, and rendered controls. Full `goto_options`, `wait_for_selector`, and `viewport` objects are available alongside flattened conveniences, with ambiguous combinations rejected. Static mode rejects browser-only options; crawl status accepts string or non-negative integer cursors and current record filters.
+
+Screenshot and PDF results are written with unpredictable names into a process-private directory. Paths exclude URL credentials, files use mode `0600`, quotas prevent unbounded accumulation, and the directory is removed when the MCP process exits normally (a process killed by a signal leaves its private `0700` directory in the system temp folder).
+
+Validation, configuration and SDK errors (authentication, rate limits, transport failures) are returned to the client as tool errors with their message; unexpected internal errors are reported only as a generic tool failure.
 
 ## Troubleshooting
 
-- Interaction tools return `501`: your Worker is missing the `BROWSER` binding.
-- Interaction tools return `404`: your Worker deployment is stale. Redeploy from the current repo and confirm `/health` reports `version: "2.0.1"`.
-- `browser_scrape` or `browser_links` responses differ between environments: the MCP server normalizes legacy response shapes, but redeploying the Worker keeps every layer consistent.
+- Interaction returns 501: enable the Worker `BROWSER` binding.
+- Interaction returns 404: redeploy the current Worker; `/health` should report `2.1.0`.
+- A tool reports ambiguous or missing credentials (checked on the first tool call): set `CF_BROWSER_MODE=direct` or `worker` and that mode's two variables.
+- Crawl wait returns a failed JSON status only for terminal crawl states; transport/auth errors remain typed errors instead of being mislabeled as job failures. A crawl that finished but whose results could not be fetched in time reports `status: "completed"` with `_timeout: true`.
 
-## Requirements
-
-- Python 3.10+
-- **Direct Mode**: Cloudflare Account ID + API Token
-- **Worker Mode**: A deployed [CF Browser Worker](https://github.com/claude-world/cf-browser)
+See the [project README](https://github.com/claude-world/cf-browser#readme) for setup and the complete API contract.
 
 ## License
 
