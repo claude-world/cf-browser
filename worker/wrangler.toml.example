@@ -21,10 +21,12 @@ compatibility_flags = ["nodejs_compat"]
 #                    Generate: openssl rand -hex 32
 # -------------------------------------------------------------------
 
-# Create these resources, then paste the IDs below:
-#   wrangler kv namespace create CACHE
+# Create these resources, then paste the IDs below (setup.sh does this for you):
+#   wrangler kv namespace create cf-browser-CACHE
 #   wrangler r2 bucket create cf-browser-storage
-#   wrangler r2 bucket lifecycle add cf-browser-storage cf-browser-expire-after-8-days --expire-days 8 --force
+#   wrangler r2 bucket lifecycle add cf-browser-storage cf-browser-prefix-expire-after-8-days cf-browser/ --expire-days 8
+# The Worker stores every R2 object under cf-browser/, so that rule expires all
+# of them; use a dedicated bucket and keep other data outside that prefix.
 
 [[kv_namespaces]]
 binding = "CACHE"

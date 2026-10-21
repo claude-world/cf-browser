@@ -35,6 +35,17 @@ set -euo pipefail
 
 command_name="$(basename "$0")"
 
+# Package managers, venv creation and import checks must never see credentials.
+assert_scrubbed() {
+  local name
+  for name in CF_API_TOKEN CF_API_KEY CF_EMAIL CF_BROWSER_API_KEY \
+      CLOUDFLARE_API_TOKEN CLOUDFLARE_API_KEY CLOUDFLARE_EMAIL \
+      CLOUDFLARE_ACCESS_CLIENT_ID CLOUDFLARE_ACCESS_CLIENT_SECRET \
+      WRANGLER_CF_AUTHORIZATION_TOKEN WRANGLER_BASIN_SQL_AUTH_TOKEN; do
+    [ -z "${!name+x}" ]
+  done
+}
+
 case "$command_name" in
   node)
     if [ "${1:-}" = "-p" ]; then
@@ -44,11 +55,7 @@ case "$command_name" in
     fi
     ;;
   npm)
-    [ -z "${CF_API_TOKEN+x}" ]
-    [ -z "${CF_BROWSER_API_KEY+x}" ]
-    [ -z "${CLOUDFLARE_API_TOKEN+x}" ]
-    [ -z "${CLOUDFLARE_API_KEY+x}" ]
-    [ -z "${CLOUDFLARE_EMAIL+x}" ]
+    assert_scrubbed
     exit 0
     ;;
   npx)
@@ -66,13 +73,22 @@ case "$command_name" in
       previous_argument="$argument"
     done
     case "${1:-} ${2:-}" in
-      "whoami ")
-        printf 'Account ID: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
-        printf 'Account ID: cccccccccccccccccccccccccccccccc\n'
+      "whoami --json")
+        [ "${CF_BROWSER_TEST_LOGGED_OUT:-0}" != "1" ] || exit 1
+        printf '%s\n' '{"loggedIn":true,"email":"sentinel@example.test","accounts":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"A"},{"id":"cccccccccccccccccccccccccccccccc","name":"C"}]}'
         ;;
       "kv namespace")
         if [ "${3:-}" = "list" ]; then
-          printf '[{"title":"cf-browser-CACHE","id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]\n'
+          if [ -n "${CF_BROWSER_TEST_KV_MARKER:-}" ] \
+              && [ ! -f "$CF_BROWSER_TEST_KV_MARKER" ]; then
+            printf '[{"title":"CACHE","id":"dddddddddddddddddddddddddddddddd"}]\n'
+          else
+            printf '[{"title":"cf-browser-CACHE","id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]\n'
+          fi
+        elif [ "${3:-}" = "create" ]; then
+          [ "${4:-}" = "cf-browser-CACHE" ]
+          [ -n "${CF_BROWSER_TEST_KV_MARKER:-}" ]
+          : > "$CF_BROWSER_TEST_KV_MARKER"
         else
           exit 1
         fi
@@ -99,9 +115,10 @@ case "$command_name" in
           [ -z "${CF_BROWSER_TEST_LIFECYCLE_MARKER:-}" ] \
             || : > "$CF_BROWSER_TEST_LIFECYCLE_MARKER"
           exit 0
-        elif [ "${3:-}" = "list" ]; then
-          printf 'Listing buckets...\n%s\n' \
-            "${CF_BROWSER_TEST_BUCKET_LIST:-$CF_BROWSER_TEST_EXPECTED_BUCKET}"
+        elif [ "${3:-}" = "info" ]; then
+          [ "${5:-}" = "--json" ]
+          printf '%s\n' "${CF_BROWSER_TEST_BUCKET_LIST:-}" | grep -Fqx -- "${4:-}"
+          printf '{"name":"%s","location":"WNAM"}\n' "$4"
         elif [ "${3:-}" = "create" ]; then
           [ "${4:-}" = "$CF_BROWSER_TEST_EXPECTED_BUCKET" ]
           [ "${CF_BROWSER_TEST_FAIL_R2_CREATE:-0}" != "1" ]
@@ -113,6 +130,11 @@ case "$command_name" in
       "r2 object")
         object_path="${4:-}"
         [ "$object_path" = "${CF_BROWSER_TEST_EXPECTED_BUCKET}/.cf-browser-managed-v1" ]
+        remote=0
+        for argument in "$@"; do
+          [ "$argument" != "--remote" ] || remote=1
+        done
+        [ "$remote" = "1" ]
         data_file=""
         previous_argument=""
         for argument in "$@"; do
@@ -233,24 +255,17 @@ PY
     ;;
   python|python3)
     if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+      assert_scrubbed
       mkdir -p "$3/bin"
       ln -s "$0" "$3/bin/python"
     elif [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then
-      [ -z "${CF_API_TOKEN+x}" ]
-      [ -z "${CF_BROWSER_API_KEY+x}" ]
-      [ -z "${CLOUDFLARE_API_TOKEN+x}" ]
-      [ -z "${CLOUDFLARE_API_KEY+x}" ]
-      [ -z "${CLOUDFLARE_EMAIL+x}" ]
+      assert_scrubbed
       for argument in "$@"; do
         [ "$argument" != "-e" ]
       done
       exit 0
     elif [ "${1:-}" = "-c" ] && [[ "${2:-}" == *"import cf_browser"* ]]; then
-      [ -z "${CF_API_TOKEN+x}" ]
-      [ -z "${CF_BROWSER_API_KEY+x}" ]
-      [ -z "${CLOUDFLARE_API_TOKEN+x}" ]
-      [ -z "${CLOUDFLARE_API_KEY+x}" ]
-      [ -z "${CLOUDFLARE_EMAIL+x}" ]
+      assert_scrubbed
       exit 0
     elif [ "${1:-}" = "-c" ] && [[ "${2:-}" == *"secrets.randbelow"* ]]; then
       printf '1001\n'
@@ -306,40 +321,76 @@ MOCK_R2_BUCKET="cf-browser-storage-${MOCK_ACCOUNT_ID}"
 MOCK_WRANGLER_TOKEN="wrangler-token-sentinel"
 MOCK_WRANGLER_KEY="wrangler-key-sentinel"
 MOCK_WRANGLER_EMAIL="wrangler-email-sentinel@example.test"
-SETUP_OUTPUT="$(
-  env \
+MOCK_LEGACY_KEY="legacy-key-sentinel"
+MOCK_ACCESS_SECRET="access-secret-sentinel"
+MOCK_CF_AUTHORIZATION="cf-authorization-sentinel"
+
+# Run setup.sh with only the variables a scenario passes. `env -i` keeps the
+# caller's environment (a real CLAUDE_CONFIG_DIR, Cloudflare tokens, ...) out
+# of every run; later NAME=value arguments override the defaults below.
+run_setup() {
+  local fixture="$1" name="$2"
+  shift 2
+  mkdir -p "$TEST_ROOT/$name/tmp" "$TEST_ROOT/$name/claude"
+  env -i \
     PATH="$MOCK_BIN:/usr/bin:/bin" \
-    HOME="$TEST_ROOT/home" \
-    XDG_CONFIG_HOME="$TEST_ROOT/config" \
+    HOME="$TEST_ROOT/$name/home" \
+    TMPDIR="$TEST_ROOT/$name/tmp" \
+    XDG_CONFIG_HOME="$TEST_ROOT/$name/config" \
+    CLAUDE_CONFIG_DIR="$TEST_ROOT/$name/claude" \
     CF_BROWSER_TEST_REAL_PYTHON="$REAL_PYTHON" \
-    CF_BROWSER_TEST_CALL_LOG="$CALL_LOG" \
+    CF_BROWSER_TEST_CALL_LOG="$TEST_ROOT/$name/calls.log" \
     CF_BROWSER_TEST_EXPECTED_TOKEN="$MOCK_API_TOKEN" \
     CF_BROWSER_TEST_EXPECTED_KEY="$MOCK_API_KEY" \
     CF_BROWSER_TEST_EXPECTED_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
     CF_BROWSER_TEST_EXPECTED_BUCKET="$MOCK_R2_BUCKET" \
-    CF_BROWSER_TEST_BUCKET_MARKER_STORE="$TEST_ROOT/r2-ownership-marker" \
-    CF_BROWSER_TEST_LIFECYCLE_MARKER="$TEST_ROOT/lifecycle-created" \
-    CF_BROWSER_TEST_BUCKET_LIST="${MOCK_R2_BUCKET}-backup" \
     CF_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
     CF_API_TOKEN="$MOCK_API_TOKEN" \
     CF_BROWSER_API_KEY="$MOCK_API_KEY" \
     CLOUDFLARE_API_TOKEN="$MOCK_WRANGLER_TOKEN" \
     CLOUDFLARE_API_KEY="$MOCK_WRANGLER_KEY" \
     CLOUDFLARE_EMAIL="$MOCK_WRANGLER_EMAIL" \
+    "$@" \
+    /bin/bash "$fixture/setup.sh"
+}
+
+assert_no_secrets() {
+  local output="$1" secret
+  for secret in "$MOCK_API_TOKEN" "$MOCK_API_KEY" "$MOCK_WRANGLER_TOKEN" \
+      "$MOCK_WRANGLER_KEY" "$MOCK_WRANGLER_EMAIL" "$MOCK_LEGACY_KEY" \
+      "$MOCK_ACCESS_SECRET" "$MOCK_CF_AUTHORIZATION" "sentinel@example.test"; do
+    [[ "$output" != *"$secret"* ]]
+  done
+}
+
+CALL_LOG="${TEST_ROOT}/main/calls.log"
+SETUP_OUTPUT="$(
+  run_setup "$FIXTURE" main \
+    CF_BROWSER_TEST_BUCKET_MARKER_STORE="$TEST_ROOT/r2-ownership-marker" \
+    CF_BROWSER_TEST_LIFECYCLE_MARKER="$TEST_ROOT/lifecycle-created" \
+    CF_BROWSER_TEST_KV_MARKER="$TEST_ROOT/kv-created" \
+    CF_BROWSER_TEST_BUCKET_LIST="${MOCK_R2_BUCKET}-backup" \
+    CF_API_KEY="$MOCK_LEGACY_KEY" \
+    CF_EMAIL="$MOCK_WRANGLER_EMAIL" \
+    CLOUDFLARE_ACCESS_CLIENT_ID="access-client-id" \
+    CLOUDFLARE_ACCESS_CLIENT_SECRET="$MOCK_ACCESS_SECRET" \
+    WRANGLER_CF_AUTHORIZATION_TOKEN="$MOCK_CF_AUTHORIZATION" \
     CF_BROWSER_ENABLE_INTERACTIONS=1 \
-    /bin/bash "$FIXTURE/setup.sh" 2>&1
+    2>&1
 )"
 
-[[ "$SETUP_OUTPUT" != *"$MOCK_API_TOKEN"* ]]
-[[ "$SETUP_OUTPUT" != *"$MOCK_API_KEY"* ]]
-[[ "$SETUP_OUTPUT" != *"$MOCK_WRANGLER_TOKEN"* ]]
-[[ "$SETUP_OUTPUT" != *"$MOCK_WRANGLER_KEY"* ]]
-[[ "$SETUP_OUTPUT" != *"$MOCK_WRANGLER_EMAIL"* ]]
+assert_no_secrets "$SETUP_OUTPUT"
 grep -Fq 'deploy --config' "$CALL_LOG"
 grep -Fq -- '--secrets-file' "$CALL_LOG"
+grep -Fq 'whoami --json' "$CALL_LOG"
+grep -Fq 'kv namespace create cf-browser-CACHE --config' "$CALL_LOG"
+grep -Fq "r2 bucket info ${MOCK_R2_BUCKET} --json" "$CALL_LOG"
 grep -Fq "r2 bucket create ${MOCK_R2_BUCKET}" "$CALL_LOG"
 grep -Fq \
-  "r2 object put ${MOCK_R2_BUCKET}/.cf-browser-managed-v1 --file" \
+  "r2 object put ${MOCK_R2_BUCKET}/.cf-browser-managed-v1 --remote --file" \
+  "$CALL_LOG"
+grep -Fq \
+  "r2 object get ${MOCK_R2_BUCKET}/.cf-browser-managed-v1 --remote --file" \
   "$CALL_LOG"
 grep -Fq \
   "r2 bucket lifecycle add ${MOCK_R2_BUCKET} cf-browser-prefix-expire-after-8-days cf-browser/ --expire-days 8 --config" \
@@ -348,40 +399,12 @@ if grep -Fq -- '--force' "$CALL_LOG"; then
   echo "setup unexpectedly bypassed Wrangler safety checks with --force" >&2
   exit 1
 fi
-
-WRONG_LIFECYCLE_FIXTURE="${TEST_ROOT}/wrong-lifecycle-repo"
-WRONG_LIFECYCLE_CALL_LOG="${TEST_ROOT}/wrong-lifecycle-calls.log"
-mkdir -p \
-  "$WRONG_LIFECYCLE_FIXTURE/worker" \
-  "$WRONG_LIFECYCLE_FIXTURE/sdk" \
-  "$WRONG_LIFECYCLE_FIXTURE/mcp-server"
-cp "$ROOT_DIR/setup.sh" "$WRONG_LIFECYCLE_FIXTURE/setup.sh"
-if env \
-    PATH="$MOCK_BIN:/usr/bin:/bin" \
-    HOME="$TEST_ROOT/wrong-lifecycle-home" \
-    XDG_CONFIG_HOME="$TEST_ROOT/wrong-lifecycle-config" \
-    CF_BROWSER_TEST_REAL_PYTHON="$REAL_PYTHON" \
-    CF_BROWSER_TEST_CALL_LOG="$WRONG_LIFECYCLE_CALL_LOG" \
-    CF_BROWSER_TEST_EXPECTED_TOKEN="$MOCK_API_TOKEN" \
-    CF_BROWSER_TEST_EXPECTED_KEY="$MOCK_API_KEY" \
-    CF_BROWSER_TEST_EXPECTED_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
-    CF_BROWSER_TEST_EXPECTED_BUCKET="$MOCK_R2_BUCKET" \
-    CF_BROWSER_TEST_BUCKET_MARKER_MODE=valid \
-    CF_BROWSER_TEST_LIFECYCLE_WRONG=1 \
-    CF_BROWSER_TEST_BUCKET_LIST="$MOCK_R2_BUCKET" \
-    CF_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
-    CF_API_TOKEN="$MOCK_API_TOKEN" \
-    CF_BROWSER_API_KEY="$MOCK_API_KEY" \
-    /bin/bash "$WRONG_LIFECYCLE_FIXTURE/setup.sh" >/dev/null 2>&1; then
-  echo "setup unexpectedly accepted a misconfigured lifecycle rule" >&2
-  exit 1
-fi
-if grep -Fq 'r2 bucket lifecycle add' "$WRONG_LIFECYCLE_CALL_LOG"; then
-  echo "setup unexpectedly attempted to duplicate a conflicting lifecycle rule" >&2
-  exit 1
-fi
 if grep -Fq 'secret put' "$CALL_LOG"; then
   echo "setup unexpectedly used per-secret deployments" >&2
+  exit 1
+fi
+if compgen -G "$TEST_ROOT/main/tmp/*" >/dev/null; then
+  echo "setup left temporary files behind" >&2
   exit 1
 fi
 
@@ -422,16 +445,22 @@ assert re.search(
 )
 assert re.search(r'^\[browser\]\nbinding = "BROWSER"$', worker, re.MULTILINE)
 
-config_path = root / "config/cf-browser/mcp.json"
+config_dir = root / "main/config/cf-browser"
+assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
+generations = sorted(config_dir.glob("generation.*"))
+assert len(generations) == 1, generations
+generation = generations[0]
+assert stat.S_IMODE(generation.stat().st_mode) == 0o700
+
+config_path = generation / "mcp.json"
 config = json.loads(config_path.read_text())
 server = config["mcpServers"]["cf-browser"]
 assert server["env"]["CF_BROWSER_MODE"] == "worker"
 assert server["env"]["CF_BROWSER_URL"] == "https://cf-browser-test.workers.dev"
 assert server["env"]["CF_BROWSER_API_KEY"] == os.environ["MOCK_API_KEY"]
 assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
-assert stat.S_IMODE(config_path.parent.stat().st_mode) == 0o700
 
-launcher = root / "config/cf-browser/run-mcp"
+launcher = generation / "run-mcp"
 assert launcher.exists()
 assert stat.S_IMODE(launcher.stat().st_mode) == 0o700
 assert os.environ["MOCK_API_KEY"] not in launcher.read_text(encoding="utf-8")
@@ -442,8 +471,42 @@ assert 'name = "existing-cf-browser"' in backups[0].read_text()
 assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
 PY
 
+LOGGED_OUT_FIXTURE="${TEST_ROOT}/logged-out-repo"
+mkdir -p "$LOGGED_OUT_FIXTURE/worker" "$LOGGED_OUT_FIXTURE/sdk" "$LOGGED_OUT_FIXTURE/mcp-server"
+cp "$ROOT_DIR/setup.sh" "$LOGGED_OUT_FIXTURE/setup.sh"
+if LOGGED_OUT_OUTPUT="$(
+  run_setup "$LOGGED_OUT_FIXTURE" logged-out CF_BROWSER_TEST_LOGGED_OUT=1 2>&1
+)"; then
+  echo "setup unexpectedly continued without Wrangler authentication" >&2
+  exit 1
+fi
+[[ "$LOGGED_OUT_OUTPUT" == *"Wrangler is not authenticated"* ]]
+if grep -Fq 'kv namespace' "$TEST_ROOT/logged-out/calls.log"; then
+  echo "setup touched Cloudflare resources without authentication" >&2
+  exit 1
+fi
+
+WRONG_LIFECYCLE_FIXTURE="${TEST_ROOT}/wrong-lifecycle-repo"
+mkdir -p \
+  "$WRONG_LIFECYCLE_FIXTURE/worker" \
+  "$WRONG_LIFECYCLE_FIXTURE/sdk" \
+  "$WRONG_LIFECYCLE_FIXTURE/mcp-server"
+cp "$ROOT_DIR/setup.sh" "$WRONG_LIFECYCLE_FIXTURE/setup.sh"
+if run_setup "$WRONG_LIFECYCLE_FIXTURE" wrong-lifecycle \
+    CF_BROWSER_TEST_BUCKET_MARKER_MODE=valid \
+    CF_BROWSER_TEST_LIFECYCLE_WRONG=1 \
+    CF_BROWSER_TEST_BUCKET_LIST="$MOCK_R2_BUCKET" \
+    >/dev/null 2>&1; then
+  echo "setup unexpectedly accepted a misconfigured lifecycle rule" >&2
+  exit 1
+fi
+grep -Fq "r2 bucket lifecycle list ${MOCK_R2_BUCKET}" "$TEST_ROOT/wrong-lifecycle/calls.log"
+if grep -Fq 'r2 bucket lifecycle add' "$TEST_ROOT/wrong-lifecycle/calls.log"; then
+  echo "setup unexpectedly attempted to duplicate a conflicting lifecycle rule" >&2
+  exit 1
+fi
+
 ROLLBACK_CLAUDE_DIR="${TEST_ROOT}/rollback-claude"
-ROLLBACK_CALL_LOG="${TEST_ROOT}/rollback-calls.log"
 OLD_MCP_SECRET="old-registration-secret-sentinel"
 mkdir -p "$ROLLBACK_CLAUDE_DIR"
 OLD_MCP_SECRET="$OLD_MCP_SECRET" \
@@ -471,47 +534,34 @@ path.chmod(0o600)
 PY
 
 ROLLBACK_OUTPUT="$(
-  env \
-    PATH="$MOCK_BIN:/usr/bin:/bin" \
-    HOME="$TEST_ROOT/rollback-home" \
-    XDG_CONFIG_HOME="$TEST_ROOT/rollback-config" \
+  run_setup "$FIXTURE" rollback \
     CLAUDE_CONFIG_DIR="$ROLLBACK_CLAUDE_DIR" \
-    CF_BROWSER_TEST_REAL_PYTHON="$REAL_PYTHON" \
-    CF_BROWSER_TEST_CALL_LOG="$ROLLBACK_CALL_LOG" \
-    CF_BROWSER_TEST_EXPECTED_TOKEN="$MOCK_API_TOKEN" \
-    CF_BROWSER_TEST_EXPECTED_KEY="$MOCK_API_KEY" \
-    CF_BROWSER_TEST_EXPECTED_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
     CF_BROWSER_TEST_OLD_MCP_SECRET="$OLD_MCP_SECRET" \
     CF_BROWSER_TEST_CLAUDE_ADD_FAIL=1 \
+    CF_BROWSER_TEST_BUCKET_MARKER_MODE=valid \
     CF_BROWSER_TEST_LIFECYCLE_PRESENT=1 \
-    CF_BROWSER_TEST_BUCKET_LIST="cf-browser-storage" \
-    CF_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
-    CF_API_TOKEN="$MOCK_API_TOKEN" \
-    CF_BROWSER_API_KEY="$MOCK_API_KEY" \
-    CLOUDFLARE_API_TOKEN="$MOCK_WRANGLER_TOKEN" \
-    CLOUDFLARE_API_KEY="$MOCK_WRANGLER_KEY" \
-    CLOUDFLARE_EMAIL="$MOCK_WRANGLER_EMAIL" \
-    /bin/bash "$FIXTURE/setup.sh" 2>&1
+    CF_BROWSER_TEST_BUCKET_LIST="$MOCK_R2_BUCKET" \
+    2>&1
 )"
+ROLLBACK_CALL_LOG="${TEST_ROOT}/rollback/calls.log"
 
 [[ "$ROLLBACK_OUTPUT" == *"previous user-scoped registration was restored"* ]]
+[[ "$ROLLBACK_OUTPUT" == *"replaced the Worker API key"* ]]
+[[ "$ROLLBACK_OUTPUT" == *"claude mcp add --transport stdio --scope user cf-browser -- "* ]]
 [[ "$ROLLBACK_OUTPUT" != *"$OLD_MCP_SECRET"* ]]
-[[ "$ROLLBACK_OUTPUT" != *"$MOCK_API_TOKEN"* ]]
-[[ "$ROLLBACK_OUTPUT" != *"$MOCK_API_KEY"* ]]
-[[ "$ROLLBACK_OUTPUT" != *"$MOCK_WRANGLER_TOKEN"* ]]
-[[ "$ROLLBACK_OUTPUT" != *"$MOCK_WRANGLER_KEY"* ]]
-[[ "$ROLLBACK_OUTPUT" != *"$MOCK_WRANGLER_EMAIL"* ]]
+assert_no_secrets "$ROLLBACK_OUTPUT"
 [[ "$(<"$ROLLBACK_CALL_LOG")" != *"$OLD_MCP_SECRET"* ]]
 grep -Fq 'claude mcp remove --scope user cf-browser' "$ROLLBACK_CALL_LOG"
 grep -Fq 'claude mcp add --transport stdio --scope user cf-browser --' "$ROLLBACK_CALL_LOG"
-grep -Fq 'r2 bucket lifecycle list cf-browser-storage' "$ROLLBACK_CALL_LOG"
+grep -Fq "r2 bucket lifecycle list ${MOCK_R2_BUCKET}" "$ROLLBACK_CALL_LOG"
 if grep -Fq 'r2 bucket lifecycle add' "$ROLLBACK_CALL_LOG"; then
   echo "setup unexpectedly duplicated an existing R2 lifecycle rule" >&2
   exit 1
 fi
 
 OLD_MCP_SECRET="$OLD_MCP_SECRET" \
-"$REAL_PYTHON" - "$ROLLBACK_CLAUDE_DIR/.claude.json" <<'PY'
+MOCK_API_KEY="$MOCK_API_KEY" \
+"$REAL_PYTHON" - "$ROLLBACK_CLAUDE_DIR/.claude.json" "$TEST_ROOT/rollback/config/cf-browser" <<'PY'
 import json
 import os
 import stat
@@ -529,6 +579,14 @@ assert state["mcpServers"]["cf-browser"] == {
     "env": {"OLD_SECRET": os.environ["OLD_MCP_SECRET"]},
 }
 assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+# The new generation holds the only copy of the newly deployed key: keep it.
+generations = sorted(Path(sys.argv[2]).glob("generation.*"))
+assert len(generations) == 1, generations
+config_path = generations[0] / "mcp.json"
+config = json.loads(config_path.read_text(encoding="utf-8"))
+assert config["mcpServers"]["cf-browser"]["env"]["CF_BROWSER_API_KEY"] == os.environ["MOCK_API_KEY"]
+assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 PY
 
 FAIL_FIXTURE="${TEST_ROOT}/failing-repo"
@@ -536,27 +594,14 @@ mkdir -p "$FAIL_FIXTURE/worker" "$FAIL_FIXTURE/sdk" "$FAIL_FIXTURE/mcp-server"
 cp "$ROOT_DIR/setup.sh" "$FAIL_FIXTURE/setup.sh"
 printf '%s\n' 'name = "must-survive"' > "$FAIL_FIXTURE/worker/wrangler.toml"
 cp "$FAIL_FIXTURE/worker/wrangler.toml" "$FAIL_FIXTURE/original.toml"
-if env \
-    PATH="$MOCK_BIN:/usr/bin:/bin" \
-    HOME="$TEST_ROOT/failing-home" \
-    XDG_CONFIG_HOME="$TEST_ROOT/failing-config" \
-    CF_BROWSER_TEST_REAL_PYTHON="$REAL_PYTHON" \
-    CF_BROWSER_TEST_CALL_LOG="$CALL_LOG" \
-    CF_BROWSER_TEST_EXPECTED_TOKEN="$MOCK_API_TOKEN" \
-    CF_BROWSER_TEST_EXPECTED_KEY="$MOCK_API_KEY" \
-    CF_BROWSER_TEST_EXPECTED_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
-    CF_BROWSER_TEST_BUCKET_LIST="cf-browser-storage-backup" \
+if run_setup "$FAIL_FIXTURE" failing \
+    CF_BROWSER_TEST_BUCKET_LIST="${MOCK_R2_BUCKET}-backup" \
     CF_BROWSER_TEST_FAIL_R2_CREATE=1 \
-    CF_ACCOUNT_ID="$MOCK_ACCOUNT_ID" \
-    CF_API_TOKEN="$MOCK_API_TOKEN" \
-    CF_BROWSER_API_KEY="$MOCK_API_KEY" \
-    CLOUDFLARE_API_TOKEN="$MOCK_WRANGLER_TOKEN" \
-    CLOUDFLARE_API_KEY="$MOCK_WRANGLER_KEY" \
-    CLOUDFLARE_EMAIL="$MOCK_WRANGLER_EMAIL" \
-    /bin/bash "$FAIL_FIXTURE/setup.sh" >/dev/null 2>&1; then
+    >/dev/null 2>&1; then
   echo "setup unexpectedly succeeded when R2 creation failed" >&2
   exit 1
 fi
+grep -Fq "r2 bucket create ${MOCK_R2_BUCKET}" "$TEST_ROOT/failing/calls.log"
 cmp -s "$FAIL_FIXTURE/original.toml" "$FAIL_FIXTURE/worker/wrangler.toml"
 if compgen -G "$FAIL_FIXTURE/worker/.wrangler.setup.*.toml" >/dev/null; then
   echo "setup left a pending Wrangler config after failure" >&2

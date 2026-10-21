@@ -9,6 +9,9 @@
 # Prerequisites: Node.js 22+, Python 3.10+, npm, curl, openssl, and an
 # authenticated Wrangler session (`npx wrangler login`).
 
+# Never trace: later commands handle secrets, and xtrace (bash -x or an
+# inherited SHELLOPTS) would print them.
+set +x
 set -euo pipefail
 umask 077
 
@@ -43,13 +46,20 @@ R2_MARKER_FILE=""
 R2_MARKER_PROBE=""
 MCP_STAGED_DIR=""
 MCP_STAGED_RETAIN=0
+# Every credential variable Wrangler reads, including deprecated aliases.
 SCRUBBED_INSTALL_ENV=(
   env
   -u CF_API_TOKEN
+  -u CF_API_KEY
+  -u CF_EMAIL
   -u CF_BROWSER_API_KEY
   -u CLOUDFLARE_API_TOKEN
   -u CLOUDFLARE_API_KEY
   -u CLOUDFLARE_EMAIL
+  -u CLOUDFLARE_ACCESS_CLIENT_ID
+  -u CLOUDFLARE_ACCESS_CLIENT_SECRET
+  -u WRANGLER_CF_AUTHORIZATION_TOKEN
+  -u WRANGLER_BASIN_SQL_AUTH_TOKEN
 )
 cleanup() {
   [ -z "$PENDING_WRANGLER_CONFIG" ] || rm -f -- "$PENDING_WRANGLER_CONFIG"
@@ -143,17 +153,25 @@ info "Installing locked Worker dependencies..."
 cd "$WORKER_DIR"
 "${SCRUBBED_INSTALL_ENV[@]}" npm ci --silent
 WRANGLER=(npx --no-install wrangler)
-"${WRANGLER[@]}" whoami >/dev/null 2>&1 \
+# Plain `whoami` succeeds even when logged out; `--json` fails instead.
+WHOAMI_JSON="$("${WRANGLER[@]}" whoami --json 2>/dev/null </dev/null)" \
   || die "Wrangler is not authenticated. Run: cd worker && npx wrangler login"
 ok "Prerequisites and Wrangler authentication verified."
 
 CF_ACCOUNT_ID="$INPUT_CF_ACCOUNT_ID"
 if [ -z "$CF_ACCOUNT_ID" ]; then
   DISCOVERED_ACCOUNT_IDS="$(
-    "${WRANGLER[@]}" whoami 2>/dev/null \
-      | grep -oE '[a-f0-9]{32}' \
-      | sort -u \
-      || true
+    printf '%s' "$WHOAMI_JSON" | "$PYTHON_CMD" -c '
+import json, re, sys
+try:
+    accounts = json.load(sys.stdin).get("accounts") or []
+except Exception:
+    accounts = []
+for account in accounts:
+    account_id = str(account.get("id", "")) if isinstance(account, dict) else ""
+    if re.fullmatch(r"[a-f0-9]{32}", account_id):
+        print(account_id)
+' | sort -u || true
   )"
   DISCOVERED_ACCOUNT_COUNT="$(
     printf '%s\n' "$DISCOVERED_ACCOUNT_IDS" | sed '/^$/d' | wc -l | tr -d ' '
@@ -167,7 +185,7 @@ if [ -z "$CF_ACCOUNT_ID" ]; then
 fi
 if [ -z "$CF_ACCOUNT_ID" ]; then
   echo "Find the Account ID in the Cloudflare dashboard account overview."
-  read -rp "Cloudflare Account ID: " CF_ACCOUNT_ID
+  read -rp "Cloudflare Account ID: " CF_ACCOUNT_ID || true
 fi
 [[ "$CF_ACCOUNT_ID" =~ ^[a-fA-F0-9]{32}$ ]] || die "A valid 32-character Account ID is required."
 
@@ -175,7 +193,7 @@ CF_API_TOKEN="$INPUT_CF_API_TOKEN"
 if [ -z "$CF_API_TOKEN" ]; then
   echo "Create a token with Account > Browser Run (Browser Rendering) > Edit permission:"
   echo "https://dash.cloudflare.com/profile/api-tokens"
-  read -rsp "Cloudflare API Token (hidden): " CF_API_TOKEN
+  read -rsp "Cloudflare API Token (hidden): " CF_API_TOKEN || true
   echo
 fi
 [ -n "$CF_API_TOKEN" ] || die "Cloudflare API Token is required."
@@ -185,8 +203,12 @@ if [ -z "$API_KEY" ]; then
   API_KEY="$(openssl rand -hex 32)"
 fi
 [ "${#API_KEY}" -ge 32 ] || die "CF_BROWSER_API_KEY must be at least 32 characters."
-[[ "$API_KEY" != *$'\n'* && "$API_KEY" != *$'\r'* ]] \
-  || die "CF_BROWSER_API_KEY must not contain line breaks."
+# The Worker splits API_KEYS on commas, and clients send the key as a header.
+CFB_SETUP_API_KEY="$API_KEY" "$PYTHON_CMD" -c '
+import os
+key = os.environ["CFB_SETUP_API_KEY"]
+raise SystemExit(0 if all("!" <= c <= "~" and c != "," for c in key) else 1)
+' || die "CF_BROWSER_API_KEY must use visible ASCII characters without commas or whitespace."
 ok "Credentials loaded without displaying secret values."
 
 # Use a real .toml filename: current Wrangler intentionally ignores unknown
@@ -212,6 +234,9 @@ compatibility_date = "2026-07-18"
 compatibility_flags = ["nodejs_compat"]
 TOML
 
+# Wrangler titles a namespace exactly as named, so create and look up the same
+# project-specific title.
+KV_NAMESPACE_TITLE="cf-browser-CACHE"
 find_cache_id() {
   "${WRANGLER[@]}" kv namespace list --config "$WRANGLER_CONFIG" 2>/dev/null | "$PYTHON_CMD" -c '
 import json, sys
@@ -220,30 +245,21 @@ try:
 except Exception:
     raise SystemExit(1)
 for item in data:
-    if item.get("title") == "cf-browser-CACHE":
+    if item.get("title") == sys.argv[1]:
         print(item.get("id", ""))
         break
-'
+' "$KV_NAMESPACE_TITLE"
 }
 
 info "Ensuring the CACHE KV namespace exists..."
 CACHE_ID="$(find_cache_id || true)"
 if [ -z "$CACHE_ID" ]; then
-  if CACHE_OUTPUT="$(
-    "${WRANGLER[@]}" kv namespace create CACHE \
-      --config "$WRANGLER_CONFIG" 2>&1
-  )"; then
-    CACHE_ID="$(
-      printf '%s' "$CACHE_OUTPUT" \
-        | sed -n 's/.*id = "\([^"]*\)".*/\1/p' \
-        | head -1
-    )"
-  else
-    CACHE_ID="$(find_cache_id || true)"
-  fi
+  "${WRANGLER[@]}" kv namespace create "$KV_NAMESPACE_TITLE" \
+    --config "$WRANGLER_CONFIG" >/dev/null 2>&1 </dev/null || true
+  CACHE_ID="$(find_cache_id || true)"
 fi
 if [[ ! "$CACHE_ID" =~ ^[a-fA-F0-9]{32}$ ]]; then
-  read -rp "Existing CACHE namespace ID: " CACHE_ID
+  read -rp "Existing CACHE namespace ID: " CACHE_ID || true
 fi
 [[ "$CACHE_ID" =~ ^[a-fA-F0-9]{32}$ ]] || die "A valid CACHE namespace ID is required."
 ok "CACHE namespace is ready."
@@ -261,41 +277,28 @@ fi
 
 bucket_exists() {
   local bucket_output
+  # `bucket info` looks up the exact name; `bucket list` returns only one page.
   bucket_output="$(
-    "${WRANGLER[@]}" r2 bucket list --config "$WRANGLER_CONFIG" 2>/dev/null
+    "${WRANGLER[@]}" r2 bucket info "$R2_BUCKET_NAME" --json \
+      --config "$WRANGLER_CONFIG" 2>/dev/null
   )" || return 1
-  # Wrangler currently renders R2 lists as a table, while older releases and
-  # test doubles may emit JSON. Parse both forms and require an exact name.
   printf '%s\n' "$bucket_output" | "$PYTHON_CMD" -c '
-import json, re, sys
+import json, sys
 
-target = sys.argv[1]
-raw = sys.stdin.read()
 try:
-    payload = json.loads(raw)
+    payload = json.load(sys.stdin)
 except Exception:
-    payload = None
-if isinstance(payload, list):
-    names = {
-        str(item.get("name") or item.get("bucket_name") or "")
-        for item in payload
-        if isinstance(item, dict)
-    }
-else:
-    names = {
-        token
-        for line in raw.splitlines()
-        for token in re.split(r"[\s|│]+", line.strip())
-        if token
-    }
-raise SystemExit(0 if target in names else 1)
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(payload, dict) and payload.get("name") == sys.argv[1] else 1)
 ' "$R2_BUCKET_NAME"
 }
 
 verify_bucket_marker() {
   rm -f -- "$R2_MARKER_PROBE"
+  # Wrangler 4 defaults `r2 object` commands to local storage.
   if ! "${WRANGLER[@]}" r2 object get \
       "${R2_BUCKET_NAME}/${R2_BUCKET_MARKER_KEY}" \
+      --remote \
       --file "$R2_MARKER_PROBE" \
       --config "$WRANGLER_CONFIG" >/dev/null 2>&1; then
     return 1
@@ -342,6 +345,7 @@ path.chmod(0o600)
 PY
   "${WRANGLER[@]}" r2 object put \
     "${R2_BUCKET_NAME}/${R2_BUCKET_MARKER_KEY}" \
+    --remote \
     --file "$R2_MARKER_FILE" \
     --content-type application/json \
     --config "$WRANGLER_CONFIG" >/dev/null 2>&1
@@ -519,11 +523,15 @@ path.chmod(0o600)
 PY
 
 info "Deploying the Worker with encrypted secrets..."
-if ! DEPLOY_OUTPUT="$(
+DEPLOY_STATUS=0
+DEPLOY_OUTPUT="$(
   "${WRANGLER[@]}" deploy \
     --config "$WRANGLER_CONFIG" \
     --secrets-file "$SECRETS_FILE" 2>&1
-)"; then
+)" || DEPLOY_STATUS=$?
+rm -f -- "$SECRETS_FILE"
+SECRETS_FILE=""
+if [ "$DEPLOY_STATUS" != "0" ]; then
   error "$DEPLOY_OUTPUT"
   die "Worker deployment failed."
 fi
@@ -540,7 +548,7 @@ if [ -z "$WORKER_URL" ]; then
   )"
 fi
 if [ -z "$WORKER_URL" ]; then
-  read -rp "Deployed Worker URL: " WORKER_URL
+  read -rp "Deployed Worker URL: " WORKER_URL || true
 fi
 [[ "$WORKER_URL" =~ ^https:// ]] || die "A valid HTTPS Worker URL is required."
 ok "Worker deployment completed."
@@ -586,6 +594,8 @@ SMOKE_CODE="$(
     --data '{"url":"https://example.com","no_cache":true}' \
     || true
 )"
+rm -f -- "$SMOKE_CURL_CONFIG"
+SMOKE_CURL_CONFIG=""
 [ "$SMOKE_CODE" = "200" ] || die "Authenticated Markdown smoke test returned HTTP ${SMOKE_CODE}."
 [ -s "$SMOKE_BODY" ] || die "Authenticated Markdown smoke test returned an empty body."
 ok "Readiness and authenticated Markdown smoke tests passed."
@@ -601,7 +611,7 @@ MCP_CONFIG="${MCP_STAGED_DIR}/mcp.json"
 MCP_LAUNCHER="${MCP_STAGED_DIR}/run-mcp"
 
 info "Staging the SDK and MCP server in an isolated generation..."
-"$PYTHON_CMD" -m venv "$VENV_DIR"
+"${SCRUBBED_INSTALL_ENV[@]}" "$PYTHON_CMD" -m venv "$VENV_DIR"
 VENV_PYTHON="${VENV_DIR}/bin/python"
 "${SCRUBBED_INSTALL_ENV[@]}" "$VENV_PYTHON" -m pip install --quiet --upgrade pip
 "${SCRUBBED_INSTALL_ENV[@]}" "$VENV_PYTHON" -m pip install --quiet \
@@ -736,23 +746,27 @@ except Exception:
 PY
   then
     if claude mcp remove --scope user cf-browser >/dev/null 2>&1; then
+      # Deploying replaced the Worker API key, so keep the new generation if the
+      # old registration has to be restored.
+      MCP_STAGED_RETAIN=1
       if claude mcp add \
           --transport stdio \
           --scope user \
           cf-browser -- "$MCP_LAUNCHER" >/dev/null 2>&1; then
         MCP_REGISTRATION_STATUS="current"
-        MCP_STAGED_RETAIN=1
       elif restore_claude_registration; then
         MCP_REGISTRATION_STATUS="restored"
-        warn "Claude Code registration failed; the previous user-scoped registration was restored."
+        warn "Claude Code registration failed; the previous user-scoped registration was restored, but this deployment replaced the Worker API key it may use."
       else
-        die "Claude Code registration failed and the previous registration could not be restored."
+        die "Claude Code registration failed and the previous registration could not be restored. New private MCP config: ${MCP_CONFIG}"
       fi
     elif restore_claude_registration; then
+      MCP_STAGED_RETAIN=1
       MCP_REGISTRATION_STATUS="restored"
-      warn "Claude Code registration could not be replaced; the previous user-scoped registration was preserved."
+      warn "Claude Code registration could not be replaced; the previous user-scoped registration was preserved, but this deployment replaced the Worker API key it may use."
     else
-      die "Claude Code registration could not be replaced or restored."
+      MCP_STAGED_RETAIN=1
+      die "Claude Code registration could not be replaced or restored. New private MCP config: ${MCP_CONFIG}"
     fi
   else
     rm -f -- "$MCP_REGISTRATION_BACKUP"
@@ -785,8 +799,10 @@ case "$MCP_REGISTRATION_STATUS" in
     echo "Claude Code: user-scoped server registered"
     ;;
   restored)
-    echo "Private MCP config: previous installation unchanged"
-    echo "Claude Code: previous user-scoped registration restored"
+    echo "Private MCP config: ${MCP_CONFIG}"
+    echo "Claude Code: previous registration restored; register the new server with:"
+    echo "  claude mcp remove --scope user cf-browser"
+    echo "  claude mcp add --transport stdio --scope user cf-browser -- ${MCP_LAUNCHER}"
     ;;
   *)
     echo "Private MCP config: ${MCP_CONFIG}"
