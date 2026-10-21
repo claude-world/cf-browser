@@ -1,5 +1,5 @@
 /**
- * Validate that a URL is safe to forward to the CF Browser Rendering API.
+ * Validate that a URL is safe to forward to the Cloudflare Browser Run API.
  * Only allows http: and https: schemes to prevent SSRF via file:/data:/etc.
  *
  * Note on DNS rebinding: for REST API routes the actual fetch is performed by
@@ -10,7 +10,7 @@
 
 export type UrlValidationResult = { valid: true } | { valid: false; error: string };
 
-// Block private/internal targets to prevent SSRF
+// Block private/internal targets to prevent SSRF.
 // URL.hostname keeps brackets for IPv6: http://[::1]/ → "[::1]"
 const BLOCKED_HOSTS = new Set([
   "localhost",
@@ -26,16 +26,43 @@ const DNS_LOOKUP_ERROR = "Unable to validate URL hostname resolution";
 const DNS_ENDPOINT = "https://cloudflare-dns.com/dns-query";
 const DNS_TIMEOUT_MS = 3_000;
 
-function isIpv4Literal(host: string): boolean {
-  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host);
+function parseIpv4(host: string): number[] | null {
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host)) return null;
+  const octets = host.split(".").map(Number);
+  return octets.every((octet) => octet >= 0 && octet <= 255) ? octets : null;
 }
 
-function isIpv6Literal(host: string): boolean {
-  return host.startsWith("[") && host.endsWith("]");
+function parseIpv6(host: string): number[] | null {
+  let bare = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!bare.includes(":") || bare.includes("%")) return null;
+
+  // Convert an embedded IPv4 tail (for example ::ffff:192.0.2.1) into two
+  // hexadecimal groups before expanding the IPv6 address.
+  if (bare.includes(".")) {
+    const lastColon = bare.lastIndexOf(":");
+    const ipv4 = parseIpv4(bare.slice(lastColon + 1));
+    if (lastColon < 0 || ipv4 === null) return null;
+    bare = `${bare.slice(0, lastColon)}:${((ipv4[0]! << 8) | ipv4[1]!).toString(16)}:${(
+      (ipv4[2]! << 8) | ipv4[3]!
+    ).toString(16)}`;
+  }
+
+  if ((bare.match(/::/g) ?? []).length > 1) return null;
+  const [leftRaw, rightRaw] = bare.split("::");
+  const left = leftRaw ? leftRaw.split(":") : [];
+  const right = rightRaw ? rightRaw.split(":") : [];
+  if ([...left, ...right].some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+
+  const compressed = bare.includes("::");
+  const missing = 8 - left.length - right.length;
+  if ((compressed && missing < 1) || (!compressed && missing !== 0)) return null;
+  return [...left, ...Array(compressed ? missing : 0).fill("0"), ...right].map((group) =>
+    Number.parseInt(group, 16)
+  );
 }
 
 function isIpLiteral(host: string): boolean {
-  return isIpv4Literal(host) || isIpv6Literal(host);
+  return parseIpv4(host) !== null || parseIpv6(host) !== null;
 }
 
 function isPrivateIpLiteral(host: string): boolean {
@@ -43,23 +70,49 @@ function isPrivateIpLiteral(host: string): boolean {
     return true;
   }
 
-  if (isIpv4Literal(host)) {
-    // Block private IP ranges:
-    //   0.x, 10.x, 127.x (loopback), 172.16-31.x, 192.168.x,
-    //   169.254.x (link-local)
-    //   100.64-127.x (CGNAT / RFC 6598)
-    return /^(0\.|10\.|127\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(
-      host
+  const ipv4 = parseIpv4(host);
+  if (ipv4 !== null) {
+    const a = ipv4[0]!;
+    const b = ipv4[1]!;
+    const c = ipv4[2]!;
+    // Reject every commonly allocated non-global IPv4 range from the IANA
+    // special-purpose registry, including benchmark, documentation,
+    // multicast, and reserved networks. Public unicast addresses pass.
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0 && c === 0 && ipv4[3]! !== 9 && ipv4[3]! !== 10) ||
+      (a === 192 && b === 0 && c === 2) ||
+      (a === 192 && b === 88 && c === 99) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) ||
+      (a === 203 && b === 0 && c === 113) ||
+      a >= 224
     );
   }
 
-  const bare = host.replace(/^\[|\]$/g, "");
+  const ipv6 = parseIpv6(host);
+  if (ipv6 === null) return false;
+  const first = ipv6[0]!;
+  const second = ipv6[1]!;
+
+  // Fail closed to IPv6 global unicast (2000::/3), then exclude special-use
+  // sub-ranges inside it. This also rejects multicast, ULA, link-local,
+  // unspecified, mapped IPv4, NAT64, and deprecated site-local addresses.
+  if ((first & 0xe000) !== 0x2000) return true;
   return (
-    /^(fc|fd|fe[89a-f])/i.test(bare) || // ULA (fc00::/7) + link-local (fe80::/10) + site-local (fec0::/10)
-    /^::ffff:/i.test(bare) || // IPv4-mapped IPv6 (::ffff:0:0/96)
-    /^64:ff9b:/i.test(bare) || // NAT64 prefixes (64:ff9b::/96 + 64:ff9b:1::/48)
-    /^[0:]+$/.test(bare)
-  ); // unspecified address (::, ::0, 0:0:0:0:0:0:0:0, etc.)
+    (first === 0x2001 && second === 0) || // Teredo
+    (first === 0x2001 && second === 2 && ipv6[2]! === 0) || // benchmarking
+    (first === 0x2001 && ((second & 0xfff0) === 0x0010 || (second & 0xfff0) === 0x0020)) ||
+    (first === 0x2001 && second === 0x0db8) || // documentation
+    first === 0x2002 || // 6to4 (embeds an IPv4 target)
+    (first === 0x3fff && (second & 0xf000) === 0) // 3fff::/20 documentation
+  );
 }
 
 function validateParsedUrl(parsed: URL): UrlValidationResult {
@@ -150,7 +203,11 @@ export async function validateUrlWithDns(
 
   try {
     const answers = await resolveHostname(parsed.hostname, cache);
-    if (answers.some((answer) => isPrivateIpLiteral(answer))) {
+    const addressAnswers = answers.filter((answer) => isIpLiteral(answer));
+    if (addressAnswers.length === 0) {
+      return { valid: false, error: DNS_LOOKUP_ERROR };
+    }
+    if (addressAnswers.some((answer) => isPrivateIpLiteral(answer))) {
       return { valid: false, error: PRIVATE_DNS_ERROR };
     }
     return { valid: true };

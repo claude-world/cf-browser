@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import type { AppEnv } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
 import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
+import {
+  boundedInteractionErrorMessage,
+  boundedPageState,
+  InteractionOutputLimitError,
+} from "../lib/output-limit.js";
 
 const app = new Hono<AppEnv>();
 
@@ -22,7 +27,7 @@ app.post("/", async (c) => {
     return c.json({ error: urlCheck.error, status: 400 }, 400);
   }
 
-  if (!body.selector || typeof body.selector !== "string") {
+  if (typeof body.selector !== "string" || body.selector.trim().length === 0) {
     return c.json({ error: "Missing required field: selector", status: 400 }, 400);
   }
 
@@ -39,6 +44,9 @@ app.post("/", async (c) => {
   if (text.length > 10_000) {
     return c.json({ error: "Text exceeds 10000 character limit", status: 400 }, 400);
   }
+  if (body.clear !== undefined && typeof body.clear !== "boolean") {
+    return c.json({ error: "clear must be a boolean", status: 400 }, 400);
+  }
   const clear = body.clear === true;
 
   try {
@@ -50,19 +58,18 @@ app.post("/", async (c) => {
 
       await page.type(selector, text);
 
-      const url = page.url();
-      const title = await page.title();
-      const content = await page.content();
-
-      return { url, title, content };
+      return boundedPageState(page);
     });
 
     return c.json(result);
   } catch (err) {
     if (err instanceof BrowserBindingUnavailable) {
-      return c.json({ error: err.message, status: 501 }, 501);
+      return c.json({ error: boundedInteractionErrorMessage(err, "Browser unavailable"), status: 501 }, 501);
     }
-    const message = err instanceof Error ? err.message : "Type failed";
+    if (err instanceof InteractionOutputLimitError) {
+      return c.json({ error: boundedInteractionErrorMessage(err, "Interaction output failed"), status: 502 }, 502);
+    }
+    const message = boundedInteractionErrorMessage(err, "Type failed");
     return c.json({ error: message, status: 500 }, 500);
   }
 });

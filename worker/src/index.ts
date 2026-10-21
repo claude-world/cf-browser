@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import type { AppEnv } from "./types.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
+import { validateRequestMiddleware } from "./middleware/validate-request.js";
 import contentRoute from "./routes/content.js";
 import screenshotRoute from "./routes/screenshot.js";
 import pdfRoute from "./routes/pdf.js";
@@ -35,7 +36,12 @@ app.use(
     origin: "*",
     allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
-    exposeHeaders: ["X-Cache", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
+    exposeHeaders: [
+      "X-Cache",
+      "Retry-After",
+      "X-RateLimit-Limit",
+      "X-RateLimit-Remaining",
+    ],
   })
 );
 
@@ -44,13 +50,23 @@ app.use(
 // ---------------------------------------------------------------------------
 
 app.get("/health", (c) => {
+  const missing: string[] = [];
+  if (!c.env.CF_ACCOUNT_ID) missing.push("CF_ACCOUNT_ID");
+  if (!c.env.CF_API_TOKEN) missing.push("CF_API_TOKEN");
+  if (!c.env.API_KEYS) missing.push("API_KEYS");
+  if (!c.env.CACHE) missing.push("CACHE");
+  if (!c.env.RATE_LIMITER) missing.push("RATE_LIMITER");
+  if (!c.env.STORAGE) missing.push("STORAGE");
+  const ready = missing.length === 0;
   return c.json({
-    status: "ok",
-    version: "2.0.1",
+    status: ready ? "ok" : "degraded",
+    ready,
+    version: "2.1.0",
     capabilities: {
       interact: !!c.env.BROWSER,
     },
-  });
+    ...(ready ? {} : { missing }),
+  }, ready ? 200 : 503);
 });
 
 // ---------------------------------------------------------------------------
@@ -75,6 +91,10 @@ app.use("/type/*", authMiddleware, rateLimitMiddleware);
 app.use("/evaluate/*", authMiddleware, rateLimitMiddleware);
 app.use("/interact/*", authMiddleware, rateLimitMiddleware);
 app.use("/submit-form/*", authMiddleware, rateLimitMiddleware);
+
+// Parse and validate shared request options after authentication. Hono caches
+// the parsed body, so route handlers can read it again without consuming it.
+app.use("*", validateRequestMiddleware);
 
 // ---------------------------------------------------------------------------
 // Route handlers
@@ -113,8 +133,7 @@ app.notFound((c) => {
 
 app.onError((err, c) => {
   console.error("Unhandled error:", err);
-  const message = err instanceof Error ? err.message : "Internal server error";
-  return c.json({ error: message, status: 500 }, 500);
+  return c.json({ error: "Internal server error", status: 500 }, 500);
 });
 
 export default app;

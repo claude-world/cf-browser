@@ -16,7 +16,7 @@ function buildApp(apiKeys: string) {
         CF_API_TOKEN: "token",
         API_KEYS: apiKeys,
         CACHE: {} as KVNamespace,
-        RATE_LIMIT: {} as KVNamespace,
+        RATE_LIMITER: {} as RateLimit,
         STORAGE: {} as R2Bucket,
       }),
   };

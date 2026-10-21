@@ -7,10 +7,19 @@ import {
   performActionAndWaitForNavigation,
   toBaseBody,
 } from "../lib/puppeteer.js";
+import {
+  assertInteractionOutputSize,
+  boundedInteractionErrorMessage,
+  INTERACTION_OUTPUT_LIMIT_ERROR,
+  MAX_INTERACTION_OUTPUT_BYTES,
+  serializedByteLength,
+  truncateUtf8,
+} from "../lib/output-limit.js";
 
 const MAX_ACTIONS = 20;
 const TOTAL_TIMEOUT = 50_000; // 50 seconds
 const MAX_SCRIPT_SIZE = 10 * 1024; // 10 KB
+export { MAX_INTERACTION_OUTPUT_BYTES } from "../lib/output-limit.js";
 
 type ActionResult = {
   action: string;
@@ -47,48 +56,138 @@ app.post("/", async (c) => {
     return c.json({ error: `Actions array exceeds ${MAX_ACTIONS} item limit`, status: 400 }, 400);
   }
 
-  const actions = body.actions as InteractAction[];
-
-  // Validate selectors length
-  for (const a of actions) {
-    if ("selector" in a && typeof a.selector === "string" && a.selector.length > 500) {
-      return c.json({ error: "Selector exceeds 500 character limit", status: 400 }, 400);
+  for (const [index, rawAction] of body.actions.entries()) {
+    if (!rawAction || typeof rawAction !== "object" || Array.isArray(rawAction)) {
+      return c.json({ error: `actions[${index}] must be an object`, status: 400 }, 400);
     }
-    if ("script" in a && typeof a.script === "string" && a.script.length > MAX_SCRIPT_SIZE) {
-      return c.json({ error: `Script exceeds ${MAX_SCRIPT_SIZE} byte limit`, status: 400 }, 400);
+    const action = rawAction as Record<string, unknown>;
+    const name = action.action;
+    if (typeof name !== "string") {
+      return c.json({ error: `actions[${index}].action must be a string`, status: 400 }, 400);
+    }
+
+    const requireString = (field: string, maxLength: number): string | undefined => {
+      const value = action[field];
+      return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength
+        ? undefined
+        : `actions[${index}].${field} must be a non-empty string up to ${maxLength} characters`;
+    };
+
+    let validationError: string | undefined;
+    switch (name) {
+      case "navigate":
+        validationError = requireString("url", 8_192);
+        break;
+      case "click":
+        validationError = requireString("selector", 500);
+        break;
+      case "type":
+        validationError = requireString("selector", 500);
+        if (!validationError && (typeof action.text !== "string" || action.text.length > 10_000)) {
+          validationError = `actions[${index}].text must be a string up to 10000 characters`;
+        }
+        if (!validationError && action.clear !== undefined && typeof action.clear !== "boolean") {
+          validationError = `actions[${index}].clear must be a boolean`;
+        }
+        break;
+      case "wait":
+        validationError = requireString("selector", 500);
+        if (
+          !validationError &&
+          action.timeout !== undefined &&
+          (typeof action.timeout !== "number" || !Number.isFinite(action.timeout) || action.timeout < 1)
+        ) {
+          validationError = `actions[${index}].timeout must be a positive number`;
+        }
+        break;
+      case "evaluate":
+        validationError = requireString("script", MAX_SCRIPT_SIZE);
+        if (
+          !validationError &&
+          new TextEncoder().encode(action.script as string).byteLength > MAX_SCRIPT_SIZE
+        ) {
+          validationError = `actions[${index}].script exceeds ${MAX_SCRIPT_SIZE} bytes`;
+        }
+        break;
+      case "select":
+        validationError = requireString("selector", 500) ?? requireString("value", 10_000);
+        break;
+      case "scroll":
+        if (
+          (action.x !== undefined && (typeof action.x !== "number" || !Number.isFinite(action.x))) ||
+          (action.y !== undefined && (typeof action.y !== "number" || !Number.isFinite(action.y)))
+        ) {
+          validationError = `actions[${index}] scroll coordinates must be finite numbers`;
+        }
+        break;
+      case "screenshot":
+        break;
+      default:
+        validationError = `Unknown action: ${name}`;
+    }
+
+    if (validationError) {
+      return c.json({ error: validationError, status: 400 }, 400);
     }
   }
+
+  const actions = body.actions as InteractAction[];
 
   try {
     const result = await withBrowser(c.env, toBaseBody(body), async ({ page }) => {
       const results: ActionResult[] = [];
       const deadline = Date.now() + TOTAL_TIMEOUT;
+      let outputBytes = 0;
+
+      const appendResult = (entry: ActionResult): boolean => {
+        const entryBytes = serializedByteLength(entry);
+        if (!Number.isFinite(entryBytes) || outputBytes + entryBytes > MAX_INTERACTION_OUTPUT_BYTES) {
+          results.push({
+            action: entry.action,
+            ok: false,
+            error: INTERACTION_OUTPUT_LIMIT_ERROR,
+          });
+          return false;
+        }
+        results.push(entry);
+        outputBytes += entryBytes;
+        return true;
+      };
 
       actionLoop: for (const action of actions) {
-        if (Date.now() > deadline) {
-          results.push({ action: action.action, ok: false, error: "Total execution timeout exceeded" });
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          appendResult({ action: action.action, ok: false, error: "Total execution timeout exceeded" });
           break;
         }
+        page.setDefaultTimeout(Math.max(1, remaining));
 
         try {
           switch (action.action) {
             case "navigate": {
               const navCheck = validateUrl(action.url);
               if (!navCheck.valid) {
-                results.push({ action: "navigate", ok: false, error: navCheck.error });
+                if (!appendResult({ action: "navigate", ok: false, error: navCheck.error })) {
+                  break actionLoop;
+                }
                 break;
               }
-              await page.goto(action.url, { waitUntil: "load", timeout: 15_000 });
-              results.push({ action: "navigate", ok: true, result: action.url });
+              await page.goto(action.url, {
+                waitUntil: "load",
+                timeout: Math.max(1, Math.min(15_000, remaining)),
+              });
+              if (!appendResult({ action: "navigate", ok: true, result: action.url })) {
+                break actionLoop;
+              }
               continue;
             }
             case "click": {
               await performActionAndWaitForNavigation(
                 page,
                 () => page.click(action.selector),
-                3000,
+                Math.max(1, Math.min(3_000, remaining)),
               );
-              results.push({ action: "click", ok: true });
+              if (!appendResult({ action: "click", ok: true })) break actionLoop;
               continue;
             }
             case "type": {
@@ -97,19 +196,20 @@ app.post("/", async (c) => {
                 await page.keyboard.press("Backspace");
               }
               await page.type(action.selector, action.text);
-              results.push({ action: "type", ok: true });
+              if (!appendResult({ action: "type", ok: true })) break actionLoop;
               continue;
             }
             case "wait": {
               const remaining = Math.max(100, deadline - Date.now());
               const waitTimeout = Math.min(action.timeout ?? 10_000, remaining);
               await page.waitForSelector(action.selector, { timeout: waitTimeout });
-              results.push({ action: "wait", ok: true });
+              if (!appendResult({ action: "wait", ok: true })) break actionLoop;
               continue;
             }
             case "screenshot": {
               const buf = await page.screenshot({ encoding: "base64" });
-              results.push({ action: "screenshot", ok: true, data: buf as string });
+              if (typeof buf !== "string") throw new Error("Screenshot did not return base64 data");
+              if (!appendResult({ action: "screenshot", ok: true, data: buf })) break actionLoop;
               continue;
             }
             case "evaluate": {
@@ -125,7 +225,9 @@ app.post("/", async (c) => {
                     }, evalTimeout);
                   }),
                 ]);
-                results.push({ action: "evaluate", ok: true, result: evalResult });
+                if (!appendResult({ action: "evaluate", ok: true, result: evalResult })) {
+                  break actionLoop;
+                }
               } finally {
                 if (evalTimer) clearTimeout(evalTimer);
               }
@@ -133,7 +235,7 @@ app.post("/", async (c) => {
             }
             case "select": {
               await page.select(action.selector, action.value);
-              results.push({ action: "select", ok: true });
+              if (!appendResult({ action: "select", ok: true })) break actionLoop;
               continue;
             }
             case "scroll": {
@@ -142,35 +244,52 @@ app.post("/", async (c) => {
               await page.evaluate(
                 `((dx,dy)=>window.scrollBy(dx,dy))(${JSON.stringify(x)},${JSON.stringify(y)})`
               );
-              results.push({ action: "scroll", ok: true });
+              if (!appendResult({ action: "scroll", ok: true })) break actionLoop;
               continue;
             }
             default: {
               const name = String((action as any).action ?? "unknown");
-              results.push({ action: name, ok: false, error: `Unknown action: ${name}` });
+              appendResult({ action: name, ok: false, error: `Unknown action: ${name}` });
               break actionLoop; // unknown action stops processing
             }
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : "Action failed";
-          results.push({ action: action.action, ok: false, error: msg });
+          const msg = boundedInteractionErrorMessage(err, "Action failed");
+          appendResult({ action: action.action, ok: false, error: msg });
           break;
         }
       }
 
-      return {
-        url: page.url(),
-        title: await page.title(),
-        results,
+      const url = truncateUtf8(page.url(), 32 * 1024);
+      const title = truncateUtf8(await page.title(), 64 * 1024);
+      const envelopeMarker: ActionResult = {
+        action: "response",
+        ok: false,
+        error: INTERACTION_OUTPUT_LIMIT_ERROR,
       };
+      let markerNeeded = url.truncated || title.truncated;
+      let response = { url: url.value, title: title.value, results };
+      while (
+        results.length > 0 &&
+        serializedByteLength({
+          ...response,
+          results: [...results, ...(markerNeeded ? [envelopeMarker] : [])],
+        }) > MAX_INTERACTION_OUTPUT_BYTES
+      ) {
+        results.pop();
+        markerNeeded = true;
+      }
+      if (markerNeeded) results.push(envelopeMarker);
+      response = { url: url.value, title: title.value, results };
+      return assertInteractionOutputSize(response);
     });
 
     return c.json(result);
   } catch (err) {
     if (err instanceof BrowserBindingUnavailable) {
-      return c.json({ error: err.message, status: 501 }, 501);
+      return c.json({ error: boundedInteractionErrorMessage(err, "Browser unavailable"), status: 501 }, 501);
     }
-    const message = err instanceof Error ? err.message : "Interact failed";
+    const message = boundedInteractionErrorMessage(err, "Interact failed");
     return c.json({ error: message, status: 500 }, 500);
   }
 });

@@ -9,6 +9,10 @@ const TTL = 60 * 30; // 30 minutes
 
 const app = new Hono<AppEnv>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 app.post("/", async (c) => {
   let body: Record<string, unknown>;
   try {
@@ -30,11 +34,9 @@ app.post("/", async (c) => {
   const cacheKey = await buildCacheKey("snapshot", body);
 
   if (!noCache) {
-    const cached = await getCached(c, cacheKey, "kv");
+    const cached = await getCached(c, cacheKey, "r2");
     if (cached.hit) {
       c.header("X-Cache", "HIT");
-      // Cached data does not include screenshot (stripped before storage to
-      // stay under the KV 25 MB value limit). Return as-is without re-parsing.
       c.header("Content-Type", "application/json");
       return c.body(cached.data as string);
     }
@@ -48,21 +50,21 @@ app.post("/", async (c) => {
   if (!result.ok) {
     return c.json({ error: result.message, status: result.status }, result.status as 502);
   }
+  if (!isRecord(result.data)) {
+    return c.json({ error: "Cloudflare returned malformed snapshot data", status: 502 }, 502);
+  }
 
-  // Cache without screenshot to avoid KV 25MB limit
-  const { screenshot: _screenshot, ...cacheable } = result.data as Record<string, unknown>;
   if (!noCache) {
     await setCached(
       c,
       cacheKey,
-      JSON.stringify(cacheable),
+      JSON.stringify(result.data),
       "application/json",
       TTL,
-      "kv"
+      "r2"
     );
   }
 
-  // Return full response including screenshot
   c.header("X-Cache", "MISS");
   return c.json(result.data);
 });

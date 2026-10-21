@@ -1,17 +1,20 @@
 name = "cf-browser"
 main = "src/index.ts"
-compatibility_date = "2026-03-01"
+compatibility_date = "2026-07-18"
 compatibility_flags = ["nodejs_compat"]
+# Recommended when Wrangler is authenticated to multiple accounts:
+# account_id = "00000000000000000000000000000000"
 
 # -------------------------------------------------------------------
-# Secrets (set via: wrangler secret put <NAME>)
+# Secrets (set individually with `wrangler secret put <NAME>` or together with
+# `wrangler deploy --secrets-file <private-json-file>`)
 # -------------------------------------------------------------------
 #   CF_ACCOUNT_ID  — Your Cloudflare account ID
 #                    Find it: wrangler whoami
 #
-#   CF_API_TOKEN   — API token with Browser Rendering permission
+#   CF_API_TOKEN   — API token with Browser Run (Browser Rendering) permission
 #                    Create at: https://dash.cloudflare.com/profile/api-tokens
-#                    Required permission: Account > Workers Browser Rendering > Edit
+#                    Required permission: Account > Browser Run (Browser Rendering) > Edit
 #                    (In Chinese dashboard: 帳戶 > 瀏覽器轉譯 > 編輯)
 #
 #   API_KEYS       — Comma-separated API keys for client authentication
@@ -20,22 +23,28 @@ compatibility_flags = ["nodejs_compat"]
 
 # Create these resources, then paste the IDs below:
 #   wrangler kv namespace create CACHE
-#   wrangler kv namespace create RATE_LIMIT
 #   wrangler r2 bucket create cf-browser-storage
+#   wrangler r2 bucket lifecycle add cf-browser-storage cf-browser-expire-after-8-days --expire-days 8 --force
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = ""  # ← paste your CACHE namespace ID
-
-[[kv_namespaces]]
-binding = "RATE_LIMIT"
-id = ""  # ← paste your RATE_LIMIT namespace ID
+id = "00000000000000000000000000000000"  # ← replace with your CACHE namespace ID
 
 [[r2_buckets]]
 binding = "STORAGE"
 bucket_name = "cf-browser-storage"
 
-# Browser Rendering binding (Workers Paid plan, $5/mo)
+# Native per-key rate limiting (60 requests / 60 seconds per Cloudflare location).
+# Pick a positive integer namespace ID that is unique within your account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
+# Browser Run binding (Workers Paid plan)
 # Only needed for interaction endpoints (/click, /type, /evaluate, /interact, /submit-form).
 # Read-only endpoints work without it.
 [browser]

@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import type { AppEnv, BaseRequestBody } from "../types.js";
 import { validateUrl } from "../lib/validate-url.js";
 import { withBrowser, BrowserBindingUnavailable, toBaseBody } from "../lib/puppeteer.js";
+import {
+  assertInteractionOutputSize,
+  boundedInteractionErrorMessage,
+  InteractionOutputLimitError,
+} from "../lib/output-limit.js";
 
 const MAX_SCRIPT_SIZE = 10 * 1024; // 10 KB
 const EVAL_TIMEOUT = 10_000; // 10 seconds
@@ -25,12 +30,12 @@ app.post("/", async (c) => {
     return c.json({ error: urlCheck.error, status: 400 }, 400);
   }
 
-  if (!body.script || typeof body.script !== "string") {
+  if (typeof body.script !== "string" || body.script.trim().length === 0) {
     return c.json({ error: "Missing required field: script", status: 400 }, 400);
   }
 
   const script = body.script as string;
-  if (script.length > MAX_SCRIPT_SIZE) {
+  if (new TextEncoder().encode(script).byteLength > MAX_SCRIPT_SIZE) {
     return c.json({ error: `Script exceeds ${MAX_SCRIPT_SIZE} byte limit`, status: 400 }, 400);
   }
 
@@ -48,7 +53,7 @@ app.post("/", async (c) => {
           }),
         ]);
         const type = value === null ? "null" : typeof value;
-        return { result: value, type };
+        return assertInteractionOutputSize({ result: value, type });
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -57,9 +62,12 @@ app.post("/", async (c) => {
     return c.json(result);
   } catch (err) {
     if (err instanceof BrowserBindingUnavailable) {
-      return c.json({ error: err.message, status: 501 }, 501);
+      return c.json({ error: boundedInteractionErrorMessage(err, "Browser unavailable"), status: 501 }, 501);
     }
-    const message = err instanceof Error ? err.message : "Evaluate failed";
+    if (err instanceof InteractionOutputLimitError) {
+      return c.json({ error: boundedInteractionErrorMessage(err, "Interaction output failed"), status: 502 }, 502);
+    }
+    const message = boundedInteractionErrorMessage(err, "Evaluate failed");
     return c.json({ error: message, status: 500 }, 500);
   }
 });

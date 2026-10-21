@@ -3,7 +3,7 @@ export type Env = {
   CF_API_TOKEN: string;
   API_KEYS: string; // comma-separated valid API keys
   CACHE: KVNamespace;
-  RATE_LIMIT: KVNamespace;
+  RATE_LIMITER: RateLimit;
   STORAGE: R2Bucket;
   BROWSER?: Fetcher; // optional — only needed for interaction routes
 };
@@ -32,7 +32,7 @@ export type StyleTag = { content?: string; url?: string };
 // Base request body all POST routes accept.
 //
 // User-facing params use snake_case; mapToCfParams() translates them
-// to the camelCase equivalents the CF Browser Rendering REST API expects:
+// to the camelCase equivalents the Cloudflare Browser Run REST API expects:
 //   wait_for             → waitForSelector
 //   headers              → setExtraHTTPHeaders
 //   timeout              → gotoOptions.timeout
@@ -67,7 +67,8 @@ export type ScreenshotRequestBody = BaseRequestBody & {
 };
 
 export type PdfRequestBody = BaseRequestBody & {
-  format?: "A4" | "Letter" | "A3" | "A5" | "Legal" | "Tabloid";
+  format?: "A0" | "A1" | "A2" | "A3" | "A4" | "A5" | "A6" |
+    "Letter" | "Legal" | "Tabloid" | "Ledger";
   landscape?: boolean;
 };
 
@@ -80,17 +81,49 @@ export type ScrapeRequestBody = BaseRequestBody & {
 };
 
 export type JsonRequestBody = BaseRequestBody & {
+  /** @deprecated Use response_format. */
   schema?: Record<string, unknown>;
   prompt?: string;
+  response_format?: {
+    type: "json_schema";
+    json_schema: Record<string, unknown>;
+  };
 };
 
 export type LinksRequestBody = BaseRequestBody & {
   include_external?: boolean;
+  visible_only?: boolean;
 };
 
 export type CrawlRequestBody = BaseRequestBody & {
   limit?: number;       // max pages to crawl (CF API param)
   max_pages?: number;   // alias for limit (user-friendly)
+  depth?: number;
+  formats?: Array<"html" | "markdown" | "json">;
+  crawl_purposes?: Array<"search" | "ai-input" | "ai-train">;
+  max_age?: number;
+  modified_since?: number;
+  render?: boolean;
+  source?: "all" | "links" | "sitemaps";
+  include_external?: boolean;
+  include_subdomains?: boolean;
+  include_patterns?: string[];
+  exclude_patterns?: string[];
+  json_options?: Record<string, unknown>;
+  reject_request_patterns?: string[];
+  allow_request_patterns?: string[];
+  allow_resource_types?: string[];
+  javascript_enabled?: boolean;
+  action_timeout?: number;
+  wait_for_timeout?: number;
+  best_attempt?: boolean;
+  emulate_media_type?: string;
+  options?: {
+    includeExternalLinks?: boolean;
+    includeSubdomains?: boolean;
+    includePatterns?: string[];
+    excludePatterns?: string[];
+  };
 };
 
 export type A11yRequestBody = BaseRequestBody;

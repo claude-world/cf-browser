@@ -7,6 +7,11 @@ import {
   performActionAndWaitForNavigation,
   toBaseBody,
 } from "../lib/puppeteer.js";
+import {
+  boundedInteractionErrorMessage,
+  boundedPageState,
+  InteractionOutputLimitError,
+} from "../lib/output-limit.js";
 
 const app = new Hono<AppEnv>();
 
@@ -27,7 +32,7 @@ app.post("/", async (c) => {
     return c.json({ error: urlCheck.error, status: 400 }, 400);
   }
 
-  if (!body.selector || typeof body.selector !== "string") {
+  if (typeof body.selector !== "string" || body.selector.trim().length === 0) {
     return c.json({ error: "Missing required field: selector", status: 400 }, 400);
   }
 
@@ -40,19 +45,18 @@ app.post("/", async (c) => {
     const result = await withBrowser(c.env, toBaseBody(body), async ({ page }) => {
       await performActionAndWaitForNavigation(page, () => page.click(selector), 5000);
 
-      const url = page.url();
-      const title = await page.title();
-      const content = await page.content();
-
-      return { url, title, content };
+      return boundedPageState(page);
     });
 
     return c.json(result);
   } catch (err) {
     if (err instanceof BrowserBindingUnavailable) {
-      return c.json({ error: err.message, status: 501 }, 501);
+      return c.json({ error: boundedInteractionErrorMessage(err, "Browser unavailable"), status: 501 }, 501);
     }
-    const message = err instanceof Error ? err.message : "Click failed";
+    if (err instanceof InteractionOutputLimitError) {
+      return c.json({ error: boundedInteractionErrorMessage(err, "Interaction output failed"), status: 502 }, 502);
+    }
+    const message = boundedInteractionErrorMessage(err, "Click failed");
     return c.json({ error: message, status: 500 }, 500);
   }
 });

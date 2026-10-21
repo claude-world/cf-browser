@@ -1,5 +1,5 @@
 /**
- * Map user-friendly snake_case params to Cloudflare Browser Rendering
+ * Map user-friendly snake_case params to Cloudflare Browser Run
  * REST API camelCase equivalents.
  *
  * CF API silently ignores unrecognized keys, so incorrect names cause
@@ -20,12 +20,6 @@ export function mapToCfParams(
   body: Record<string, unknown>,
 ): Record<string, unknown> {
   const out = { ...body };
-
-  // Strip fields that are only meaningful for Puppeteer routes.
-  // `authenticate` sets HTTP Basic Auth via page.authenticate() — the CF REST
-  // API does not support it and would silently ignore it, misleading callers
-  // into thinking their credentials are being used.
-  delete out.authenticate;
 
   // wait_for → waitForSelector (CF API expects an object, not a plain string)
   if (out.wait_for !== undefined) {

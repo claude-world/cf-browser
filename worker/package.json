@@ -1,21 +1,31 @@
 {
   "name": "cf-browser-worker",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "fsevents@2.3.3": true,
+    "sharp@0.34.5": true,
+    "workerd@1.20260714.1": true
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "type-check": "tsc --noEmit",
-    "test": "vitest"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.1.0",
-    "hono": "^4.12.14"
+    "hono": "^4.12.30"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241205.0",
-    "typescript": "^5.6.3",
-    "vitest": "^4.1.0",
-    "wrangler": "^4.73.0"
+    "@cloudflare/workers-types": "^5.20260718.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.112.0"
   }
 }

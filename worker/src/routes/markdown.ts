@@ -34,7 +34,7 @@ app.post("/", async (c) => {
     if (cached.hit) {
       c.header("X-Cache", "HIT");
       c.header("Content-Type", cached.contentType);
-      return c.text(cached.data as string);
+      return c.body(cached.data as string);
     }
   }
 
@@ -47,13 +47,17 @@ app.post("/", async (c) => {
     return c.json({ error: result.message, status: result.status }, result.status as 502);
   }
 
+  const contentType = result.contentType.includes("application/json")
+    ? "text/markdown; charset=UTF-8"
+    : result.contentType;
+
   if (!noCache) {
-    await setCached(c, cacheKey, result.data, result.contentType, TTL, "kv");
+    await setCached(c, cacheKey, result.data, contentType, TTL, "kv");
   }
 
   c.header("X-Cache", "MISS");
-  c.header("Content-Type", result.contentType);
-  return c.text(result.data);
+  c.header("Content-Type", contentType);
+  return c.body(result.data);
 });
 
 export default app;
