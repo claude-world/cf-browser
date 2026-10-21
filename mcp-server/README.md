@@ -1,6 +1,6 @@
 # cf-browser-mcp
 
-FastMCP server exposing **17 Cloudflare Browser Run tools** (formerly Browser Rendering) to Claude Code and other MCP clients.
+MCP server (built on the official `mcp` 2.x Python SDK) exposing **17 Cloudflare Browser Run tools** (formerly Browser Rendering) to Claude Code and other MCP clients. Requires Python 3.10+.
 
 ## Install
 
@@ -53,14 +53,16 @@ Worker interaction tools:
 
 MCP input schemas accept real arrays/objects for cookies, headers, HTTP Basic authentication, actions, fields, script/style tags, and JSON response schemas. JSON-encoded strings remain accepted for compatibility. Read and interaction tools expose page controls consistently; crawls include `cache_ttl`, depth, formats, Content Signals purposes, freshness filters, URL patterns, JSON options, and rendered controls. Full `goto_options`, `wait_for_selector`, and `viewport` objects are available alongside flattened conveniences, with ambiguous combinations rejected. Static mode rejects browser-only options; crawl status accepts string or non-negative integer cursors and current record filters.
 
-Screenshot and PDF results are written with unpredictable names into a process-private directory. Paths exclude URL credentials, files use mode `0600`, quotas prevent unbounded accumulation, and the directory is removed when the MCP process exits.
+Screenshot and PDF results are written with unpredictable names into a process-private directory. Paths exclude URL credentials, files use mode `0600`, quotas prevent unbounded accumulation, and the directory is removed when the MCP process exits normally (a process killed by a signal leaves its private `0700` directory in the system temp folder).
+
+Validation, configuration and SDK errors (authentication, rate limits, transport failures) are returned to the client as tool errors with their message; unexpected internal errors are reported only as a generic tool failure.
 
 ## Troubleshooting
 
 - Interaction returns 501: enable the Worker `BROWSER` binding.
 - Interaction returns 404: redeploy the current Worker; `/health` should report `2.1.0`.
-- Startup reports ambiguous credentials: set `CF_BROWSER_MODE=direct` or `worker`.
-- Crawl wait returns a failed JSON status only for terminal crawl states; transport/auth errors remain typed errors instead of being mislabeled as job failures.
+- A tool reports ambiguous or missing credentials (checked on the first tool call): set `CF_BROWSER_MODE=direct` or `worker` and that mode's two variables.
+- Crawl wait returns a failed JSON status only for terminal crawl states; transport/auth errors remain typed errors instead of being mislabeled as job failures. A crawl that finished but whose results could not be fetched in time reports `status: "completed"` with `_timeout: true`.
 
 See the [project README](https://github.com/claude-world/cf-browser#readme) for setup and the complete API contract.
 

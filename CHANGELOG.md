@@ -5,32 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-10-21
+
+### Upgrade notes
+
+- **`cf-browser-mcp` 2.0.0 no longer starts on fresh installs** — it declared `mcp[cli]>=1.0`, which now resolves to mcp 2.x, where `mcp.server.fastmcp` was removed. Upgrade to 2.1.0, which targets the mcp 2.x `MCPServer` API.
+- **Re-run `setup.sh` for existing Worker deployments.** The Worker now stores every R2 object under `cf-browser/`, which setup's eight-day lifecycle rule covers. Objects written by earlier versions at the bucket root are never read again; delete them or let a bucket-wide rule remove them.
+- 2.0.1 was tagged but never published to PyPI; its fixes ship in this release.
 
 ### Security
 
 - **Native rate limiting** — replaced the concurrency-unsafe KV counter with Cloudflare's native Rate Limiting binding, keyed by full SHA-256 API-key digests.
-- **Crawl tenant isolation** — crawl jobs are bound to the API key that created them; missing owner metadata and cross-key GET/DELETE requests fail closed with 404, including cached results.
+- **Crawl tenant isolation** — crawl jobs are bound to the API key that created them; missing owner metadata and cross-key GET/DELETE requests fail closed with 404, including cached results. Owner records are create-only, so a job ID that Cloudflare hands back while another key owns it is answered with 409 and never shared.
 - **Crawl cancellation** — `DELETE /crawl/:id` now cancels the upstream Cloudflare job before removing local state; a KV owner fallback preserves a recovery path when both the primary owner write and compensating cancellation fail.
-- **R2 retention enforcement** — screenshot, PDF, snapshot, crawl result, and crawl-owner metadata expire logically, and setup installs and verifies an enabled, all-prefix, exact eight-day bucket lifecycle rule so unread objects are deleted too; conflicting same-name rules fail closed and legacy cache objects without valid TTL metadata are invalidated.
-- **SSRF hardening** — complete non-global IPv4/IPv6 classes, empty/CNAME-only DNS answers, injected script/style URLs, and intercepted interaction redirects/subrequests fail closed.
-- **Private MCP artifacts** — screenshot/PDF filenames are unpredictable, omit URL userinfo, use `0600` inside a `0700` directory, enforce bounded disk quotas, and are cleaned up at process exit.
-- **Secret-safe setup** — setup no longer prints generated keys, exposes application or official Wrangler credential variables to npm/pip lifecycle or package-import subprocesses, or places credentials in process arguments. It writes private MCP config with `0600`, injects Worker secrets from one mode-`0600` temporary file, and restores an existing Claude MCP registration if replacement fails.
+- **R2 retention enforcement** — screenshot, PDF, snapshot, crawl result, and crawl-owner metadata expire logically; the Worker keeps every R2 object under `cf-browser/`, and setup installs and verifies an enabled, exact eight-day lifecycle rule for that prefix so unread objects are deleted too. The bucket's ownership marker, written to and verified in the real bucket, stays outside the rule. Conflicting same-name rules fail closed and legacy cache objects without valid TTL metadata are invalidated.
+- **Bounded request bodies** — authentication and rate limiting run before any body is read, so unauthenticated and unknown requests never have their body parsed; bodies over 2 MiB return 413, and `__proto__` keys or JSON nested deeper than 64 levels return 400. Cache keys hash `__proto__` like any other key.
+- **SSRF hardening** — complete non-global IPv4/IPv6 classes, empty/CNAME-only DNS answers, and injected script/style URLs fail closed. Interaction targets are resolved before a browser launches, and blocked targets or main-frame redirects return 400; the interaction page's requests (including iframes) are intercepted, service workers are bypassed, and popups are closed. WebSocket and worker-initiated connections, and DNS changes between the check and the browser's own lookup, remain outside the Worker's interception boundary.
+- **Credential-safe SDK errors** — API keys and tokens must be visible ASCII, and httpx protocol errors (which can quote the outgoing `Authorization` header) are never echoed or chained into `TransportError`.
+- **Private MCP artifacts** — screenshot/PDF filenames are unpredictable, omit URL userinfo, use `0600` inside a `0700` directory, enforce bounded disk quotas, and are cleaned up when the server exits normally.
+- **Secret-safe setup** — setup no longer prints generated keys, exposes application or Wrangler credential variables (including deprecated aliases and Access/authorization tokens) to npm, pip, venv, or package-import subprocesses, places credentials in process arguments, or traces commands. It writes private MCP config with `0600`, injects Worker secrets from one mode-`0600` temporary file that is deleted right after deployment, and restores an existing Claude MCP registration if replacement fails.
 - **Bounded interaction output** — every interaction route enforces an eight-MiB JSON response limit; multi-action results share an exact full-envelope quota, with bounded page state and an explicit truncation marker.
-- **Hardened publishing** — build/test jobs have no OIDC permission; minimal publishing jobs download verified artifacts and use commit-pinned actions. MCP-only releases require the exact SDK version to exist on PyPI.
-- **Dependency refresh** — Hono 4.12.30, Wrangler 4.112.0, Vitest 4.1.10, current Workers types, and refreshed transitive packages produce zero full or production `npm audit` findings.
+- **Hardened publishing** — test jobs have no OIDC permission; artifacts are built in a separate job from a fresh checkout with pinned build tools, and minimal publishing jobs download them with checksum verification. Actions are pinned to verified commits, including the `pypa/gh-action-pypi-publish` v1.14.3 security release. MCP-only releases require the exact SDK version to exist on PyPI.
+- **Dependency refresh** — Hono 4.13.13, Wrangler 4.151.3, Vitest 5.0.5, TypeScript 7.0.2, `@cloudflare/puppeteer` 1.4.0, and current Workers types. Puppeteer's Node-only browser-download tooling (never bundled into the Worker) is overridden to `@puppeteer/browsers` 3.2.5, removing eight high-severity transitive advisories; full and production `npm audit` report zero findings.
 
 ### Fixed
 
+- **MCP server on mcp 2.x** — the server uses `MCPServer` from mcp 2.3+, reports its package version, and returns validation, configuration, and SDK error messages as tool errors now that mcp masks other exceptions.
 - **Current Cloudflare contracts** — PDF options use `pdfOptions`; accessibility uses `/accessibilityTree`; links use `excludeExternalLinks`/`visibleLinksOnly`; JSON schemas use `response_format`; HTTP `authenticate` is preserved.
 - **Snapshot cache parity** — cache hits now return the same complete JSON shape as misses instead of dropping the screenshot.
-- **Crawl lifecycle** — supports string and numeric opaque cursors, bounded record filters, current completion/failure/cancellation statuses, wall-clock-bounded polling, all-page final fetches, orphan cancellation, and missing-job-ID validation without caching partial pages.
+- **Crawl lifecycle** — supports string and numeric opaque cursors, bounded record filters, current completion/failure/cancellation statuses, wall-clock-bounded polling, all-page final fetches, orphan cancellation, and missing-job-ID validation without caching partial pages. A job that completes near the polling deadline gets a fresh window to fetch its results, malformed pagination is reported as a 502 `CFBrowserError` rather than a failed job, and `.`/`..` job IDs are rejected before they can escape the `/crawl/` path.
 - **Current crawl contract** — Worker, Direct SDK, and MCP expose upstream `cacheTTL`, depth, formats, Content Signals purposes, freshness filters, URL patterns, JSON extraction, and rendered request/JavaScript/viewport controls. MCP also accepts the complete structured navigation, selector-wait, and viewport objects.
 - **Interaction validation** — malformed/null actions and shared request options now return 400 instead of reaching Puppeteer or producing generic 500 errors.
-- **Canonical option and response validation** — raw canonical navigation, selector, viewport, request/resource, JavaScript, and media fields are validated before forwarding and applied consistently to interaction pages; unsupported Cloudflare-only fields fail explicitly. Malformed crawl, text, JSON, screenshot, and PDF success responses—including binary MIME/magic mismatches—fail as typed 502 errors instead of becoming false-success output.
-- **Timeout layering** — Worker and Python transport deadlines now accommodate the longest supported synchronous Browser Run action instead of aborting valid 120-second options early.
+- **Canonical option and response validation** — raw canonical navigation, selector, viewport, request/resource, JavaScript, and media fields are validated before forwarding and applied consistently to interaction pages; unsupported Cloudflare-only fields fail explicitly. Malformed crawl, text, JSON, screenshot, and PDF success responses—including binary MIME/magic mismatches—fail as typed 502 errors instead of becoming false-success output. Worker-mode `json_extract` returns extracted data that happens to contain `"success": false` instead of raising.
+- **Timeout layering** — Worker and Python transport deadlines now accommodate the longest supported synchronous Browser Run action instead of aborting valid 120-second options early, while SDK connection attempts are capped at 10 seconds.
 - **Transport classification** — SDK network failures use `TransportError`; terminal crawl states use `CrawlJobError`, so MCP no longer labels auth/network failures as failed jobs.
-- **Setup correctness** — uses `npm ci`, atomically installs a real `.toml` config only after deployment, exact-name resource checks, recoverable backup and stable rate-limit namespace, native `RATE_LIMITER`, supported Wrangler flags, account-pinned resource/deploy operations, rollback regression tests, readiness plus authenticated smoke tests, and isolated Python installation.
+- **Setup correctness** — uses `npm ci`, atomically installs a real `.toml` config only after deployment, exact-name resource checks (`r2 bucket info`, a `cf-browser-CACHE` KV namespace that reruns find again), a remote R2 ownership marker, recoverable backup and stable rate-limit namespace, native `RATE_LIMITER`, supported Wrangler flags, `whoami --json` authentication checks, account-pinned resource/deploy operations, rollback regression tests, readiness plus authenticated smoke tests, and isolated Python installation. A failed Claude Code registration keeps the newly generated configuration and prints the manual command, and prompts fail with a clear message when stdin is not a terminal.
 - **PyPI release gate** — MCP-only publication now requires an exact SDK release with at least one non-yanked downloadable file; empty or yanked-only release keys no longer false-green.
 
 ### Added
@@ -38,12 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **17 MCP tools** — added `browser_snapshot` and `browser_delete_crawl`; structured actions/fields, `no_cache`, navigation timeout, JSON schemas, link filters, and crawl pagination are exposed.
 - **Explicit MCP mode** — `CF_BROWSER_MODE=direct|worker`; ambiguous credential pairs fail closed.
 - **Readiness health response** — `/health` returns `ready`, `degraded`/503 for missing core bindings, and the optional interaction capability.
+- **`CrawlResultsTimeoutError`** — a `TimeoutError` subclass raised by `crawl_wait()` when a crawl completed but its result pages could not be fetched in time; the MCP server reports such crawls as completed.
 - **Typed distribution** — SDK wheel now contains `py.typed`; source distributions exclude local `.pymon` state.
-- **Release gates** — Python 3.10–3.13, Node 22/24, Ruff, Mypy, audit, tests, builds, Twine, archive inspection, all duplicate version sources, Actionlint, ShellCheck, mock setup end-to-end, and Wrangler dry-run are covered by CI.
+- **Release gates** — Python 3.10–3.15, Node 22/24/26, Ruff, Mypy, audit, type-checked Worker tests, builds, strict Twine checks, archive inspection, all duplicate version sources, Actionlint, ShellCheck, a hermetic mock setup end-to-end test, and Wrangler dry-run are covered by CI. Dependabot groups monthly npm, pip, and GitHub Actions updates.
 
 ### Changed
 
-- Worker, SDK, and MCP Server versions prepared as 2.1.0.
+- Worker, SDK, and MCP Server versions are 2.1.0; the SDK declares Python 3.14 support.
+- The MCP server requires `mcp[cli]>=2.3.0,<3`.
 - Minimum Node.js version is 22 to match current Wrangler; Python remains 3.10+.
 - Root/localized/package READMEs, examples, contributing guide, setup flow, and Skills now use the Cloudflare Browser Run name and describe the current API and secret-handling model.
 

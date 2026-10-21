@@ -6,13 +6,13 @@ This repo has three main contributor surfaces:
 
 - `worker/`: Cloudflare Worker proxy built with TypeScript, Hono, Wrangler, and Vitest
 - `sdk/`: Python SDK built with `httpx`, `pydantic`, `pytest`, and `respx`
-- `mcp-server/`: FastMCP wrapper around the SDK with its own pytest suite
+- `mcp-server/`: MCP server (official `mcp` 2.x SDK) wrapping the SDK, with its own pytest suite
 
 Keep changes focused, add or update tests for behavior changes, and avoid committing secrets or generated credentials.
 
 ## Prerequisites
 
-- Node.js 22+ (CI also verifies Node 24)
+- Node.js 22+ (CI also verifies Node 24 and 26)
 - Python 3.10+
 - Cloudflare account and `wrangler login` if you are working on deployed Worker behavior
 

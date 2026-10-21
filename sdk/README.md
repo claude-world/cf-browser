@@ -8,7 +8,7 @@ Typed async Python SDK for [Cloudflare Browser Run](https://developers.cloudflar
 python -m pip install cf-browser
 ```
 
-Python 3.10–3.13 is supported. The wheel includes a PEP 561 `py.typed` marker.
+Python 3.10–3.14 is supported (CI also exercises 3.15). The wheel includes a PEP 561 `py.typed` marker.
 
 ## Direct mode
 
@@ -77,7 +77,9 @@ async with CFBrowser(base_url="https://...workers.dev", api_key="...") as browse
 
 Common page options include `cookies`, `headers`, `authenticate`, `wait_for`, `wait_until`, `timeout`, `user_agent`, injected tags, and rejected resource types. `no_cache` controls local Worker caching; for crawls in either mode it maps to upstream `cacheTTL=0`. Crawls default to `render=True` and support `cache_ttl` (0-86400), `depth`, `formats`, `crawl_purposes`, `max_age`, `modified_since`, include/exclude patterns, `json_options`, and rendered request/JavaScript/viewport controls. Static crawls (`render=False`) reject browser-only options. Cloudflare does not support `user_agent` for crawl requests.
 
-Typed exceptions include `AuthenticationError`, `RateLimitError`, `NotFoundError`, `BrowserUnavailableError`, `TransportError`, and `CrawlJobError`, all deriving from `CFBrowserError`.
+Typed exceptions include `AuthenticationError`, `RateLimitError`, `NotFoundError`, `BrowserUnavailableError`, `TransportError`, and `CrawlJobError`, all deriving from `CFBrowserError`. `crawl_wait()` raises the built-in `TimeoutError` while a job is still running at the deadline, and its subclass `CrawlResultsTimeoutError` when the job completed but its result pages could not be fetched in time; malformed upstream pagination raises `CFBrowserError` with status 502.
+
+API keys and tokens must be visible ASCII (no whitespace or line breaks) and are never included in error messages. The default `timeout` (320 s Worker, 310 s Direct) covers Cloudflare's longest synchronous action, while connecting is capped at 10 s so unreachable hosts fail fast.
 
 See the [project README](https://github.com/claude-world/cf-browser#readme) for deployment and security details.
 
