@@ -1,8 +1,7 @@
-"""Smoke tests for the MCP server — verify tools are registered correctly.
+"""Tests for the MCP server: tool registration, argument handling, and error mapping.
 
-Note: These tests access FastMCP internals (_tool_manager._tools) which
-may break on FastMCP version upgrades. If tests fail after an MCP library
-update, check for changes to the internal registry API.
+Registration checks use the public ``MCPServer.list_tools()`` API; protocol-level
+checks drive the server through an in-process ``mcp.Client``.
 """
 
 import json
@@ -10,11 +9,14 @@ import stat
 from pathlib import Path
 
 import pytest
+from mcp import Client
 
 from cf_browser.exceptions import (
     BrowserUnavailableError,
     CrawlJobError,
+    CrawlResultsTimeoutError,
     NotFoundError,
+    RateLimitError,
     TransportError,
 )
 import cf_browser_mcp.server as server_module
@@ -22,15 +24,14 @@ import cf_browser_mcp.server as server_module
 from cf_browser_mcp.server import mcp
 
 
-def test_server_has_expected_tool_count():
+async def test_server_has_expected_tool_count():
     """The MCP server should expose exactly 17 browser tools."""
-    tools = mcp._tool_manager._tools  # FastMCP internal registry
-    assert len(tools) == 17
+    assert len(await mcp.list_tools()) == 17
 
 
-def test_all_tool_names_present():
+async def test_all_tool_names_present():
     """Every tool name should match a browser_* convention."""
-    tools = mcp._tool_manager._tools
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
     expected = {
         # Read-only tools
         "browser_content",
@@ -400,6 +401,27 @@ async def test_crawl_wait_only_converts_terminal_job_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_crawl_wait_distinguishes_result_fetch_timeouts(monkeypatch):
+    class SlowResultsClient:
+        async def crawl_wait(self, *_args, **_kwargs):
+            raise CrawlResultsTimeoutError("completed, but its results could not be fetched")
+
+    monkeypatch.setattr(server_module, "get_client", lambda: SlowResultsClient())
+    body = json.loads(await server_module.browser_crawl_status("job-id", wait=True))
+    assert body["status"] == "completed"
+    assert body["_timeout"] is True
+    assert "could not be fetched" in body["error"]
+
+    class StillRunningClient:
+        async def crawl_wait(self, *_args, **_kwargs):
+            raise TimeoutError("did not complete")
+
+    monkeypatch.setattr(server_module, "get_client", lambda: StillRunningClient())
+    body = json.loads(await server_module.browser_crawl_status("job-id", wait=True))
+    assert body == {"job_id": "job-id", "status": "running", "_timeout": True}
+
+
+@pytest.mark.asyncio
 async def test_browser_click_returns_deploy_hint_for_missing_route(monkeypatch):
     class MissingRouteClient:
         async def click(self, *_args, **_kwargs):
@@ -442,3 +464,70 @@ async def test_browser_click_returns_binding_hint_for_501(monkeypatch):
     body = json.loads(await server_module.browser_click("https://example.com", "button"))
     assert body["error"] == "binding unavailable"
     assert body["hint"] == "Enable the Worker BROWSER binding"
+
+
+async def test_protocol_returns_text_and_structured_result(monkeypatch):
+    class Client_:
+        async def markdown(self, *_args, **_kwargs):
+            return "# Title"
+
+    monkeypatch.setattr(server_module, "get_client", lambda: Client_())
+    async with Client(mcp) as client:
+        result = await client.call_tool("browser_markdown", {"url": "https://example.com"})
+    assert not result.is_error
+    assert result.content[0].text == "# Title"
+    assert result.structured_content == {"result": "# Title"}
+
+
+async def test_protocol_surfaces_validation_errors_to_the_model(monkeypatch):
+    class Client_:
+        async def crawl(self, *_args, **_kwargs):
+            raise AssertionError("validation must fail before the SDK is called")
+
+    monkeypatch.setattr(server_module, "get_client", lambda: Client_())
+    async with Client(mcp) as client:
+        result = await client.call_tool("browser_crawl", {"url": "https://example.com", "limit": 0})
+    assert result.is_error
+    assert result.content[0].text == (
+        "Error executing tool browser_crawl: limit must be an integer between 1 and 100000"
+    )
+
+
+async def test_protocol_surfaces_configuration_errors(monkeypatch):
+    server_module._client = None
+    for name in (
+        "CF_BROWSER_MODE",
+        "CF_ACCOUNT_ID",
+        "CF_API_TOKEN",
+        "CF_BROWSER_URL",
+        "CF_BROWSER_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    async with Client(mcp) as client:
+        result = await client.call_tool("browser_markdown", {"url": "https://example.com"})
+    assert result.is_error
+    assert "CF Browser: set either" in result.content[0].text
+
+
+async def test_protocol_surfaces_sdk_errors(monkeypatch):
+    class Client_:
+        async def content(self, *_args, **_kwargs):
+            raise RateLimitError("Rate limit exceeded", status_code=429)
+
+    monkeypatch.setattr(server_module, "get_client", lambda: Client_())
+    async with Client(mcp) as client:
+        result = await client.call_tool("browser_content", {"url": "https://example.com"})
+    assert result.is_error
+    assert result.content[0].text == "Error executing tool browser_content: Rate limit exceeded"
+
+
+async def test_protocol_masks_unexpected_exceptions(monkeypatch):
+    class Client_:
+        async def content(self, *_args, **_kwargs):
+            raise KeyError("internal-detail")
+
+    monkeypatch.setattr(server_module, "get_client", lambda: Client_())
+    async with Client(mcp) as client:
+        result = await client.call_tool("browser_content", {"url": "https://example.com"})
+    assert result.is_error
+    assert result.content[0].text == "Error executing tool browser_content"

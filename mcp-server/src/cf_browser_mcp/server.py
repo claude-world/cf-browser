@@ -4,21 +4,67 @@ from __future__ import annotations
 
 import atexit
 import asyncio
+import functools
 import json
 import math
 import os
 import re
 import shutil
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 from urllib.parse import urlparse
 
 from cf_browser import CFBrowser, CFBrowserDirect
-from cf_browser.exceptions import BrowserUnavailableError, CrawlJobError, NotFoundError
-from mcp.server.fastmcp import FastMCP
+from cf_browser.exceptions import (
+    BrowserUnavailableError,
+    CFBrowserError,
+    CrawlJobError,
+    CrawlResultsTimeoutError,
+    NotFoundError,
+)
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
-mcp = FastMCP("cf-browser")
+from cf_browser_mcp import __version__
+
+mcp = MCPServer("cf-browser", version=__version__)
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when CF Browser credentials or mode selection are invalid."""
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+# Failures whose message is meant for the model. mcp>=2.1 reports any other exception
+# only as "Error executing tool <name>" (traceback logged server-side).
+_TOOL_ERRORS: tuple[type[Exception], ...] = (ValueError, ConfigurationError, CFBrowserError)
+
+
+def _tool(
+    *, description: str
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    """Register an MCP tool, surfacing anticipated failures to the client as ``ToolError``.
+
+    The undecorated coroutine is returned (as ``MCPServer.tool()`` does), so direct unit
+    tests still observe the original exception types.
+    """
+
+    def decorator(fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+        @functools.wraps(fn)
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            try:
+                return await fn(*args, **kwargs)
+            except _TOOL_ERRORS as exc:
+                raise ToolError(str(exc)) from exc
+
+        mcp.add_tool(wrapper, description=description)
+        return fn
+
+    return decorator
+
 
 # ---------------------------------------------------------------------------
 # Shared client singleton (avoids leaking httpx.AsyncClient per tool call)
@@ -53,16 +99,16 @@ def get_client() -> CFBrowser | CFBrowserDirect:
         direct_ready = bool(account_id and api_token)
         worker_ready = bool(worker_url and worker_key)
         if mode not in {"", "direct", "worker"}:
-            raise RuntimeError("CF_BROWSER_MODE must be 'direct' or 'worker'.")
+            raise ConfigurationError("CF_BROWSER_MODE must be 'direct' or 'worker'.")
         if not mode and direct_ready and worker_ready:
-            raise RuntimeError(
+            raise ConfigurationError(
                 "Both Direct and Worker credentials are configured. Set "
                 "CF_BROWSER_MODE=direct or CF_BROWSER_MODE=worker explicitly."
             )
         if mode == "direct" and not direct_ready:
-            raise RuntimeError("Direct mode requires CF_ACCOUNT_ID and CF_API_TOKEN.")
+            raise ConfigurationError("Direct mode requires CF_ACCOUNT_ID and CF_API_TOKEN.")
         if mode == "worker" and not worker_ready:
-            raise RuntimeError("Worker mode requires CF_BROWSER_URL and CF_BROWSER_API_KEY.")
+            raise ConfigurationError("Worker mode requires CF_BROWSER_URL and CF_BROWSER_API_KEY.")
 
         selected_mode = mode or ("direct" if direct_ready else "worker" if worker_ready else "")
         if selected_mode == "direct":
@@ -78,7 +124,7 @@ def get_client() -> CFBrowser | CFBrowserDirect:
                 api_key=worker_key,
             )
         else:
-            raise RuntimeError(
+            raise ConfigurationError(
                 "CF Browser: set either (CF_ACCOUNT_ID + CF_API_TOKEN) for Direct mode "
                 "or (CF_BROWSER_URL + CF_BROWSER_API_KEY) for Worker mode."
             )
@@ -325,7 +371,7 @@ def _interaction_error_payload(err: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Fetch rendered HTML content of a web page (JavaScript executed)")
+@_tool(description="Fetch rendered HTML content of a web page (JavaScript executed)")
 async def browser_content(
     url: str,
     no_cache: bool = False,
@@ -380,7 +426,7 @@ async def browser_content(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Take a screenshot of a web page")
+@_tool(description="Take a screenshot of a web page")
 async def browser_screenshot(
     url: str,
     width: int = 1280,
@@ -438,7 +484,7 @@ async def browser_screenshot(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Generate PDF of a web page")
+@_tool(description="Generate PDF of a web page")
 async def browser_pdf(
     url: str,
     format: str = "A4",
@@ -498,7 +544,7 @@ async def browser_pdf(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Convert web page to clean Markdown (best for reading content)")
+@_tool(description="Convert web page to clean Markdown (best for reading content)")
 async def browser_markdown(
     url: str,
     no_cache: bool = False,
@@ -551,7 +597,7 @@ async def browser_markdown(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Capture page content, Markdown, screenshot, and accessibility data")
+@_tool(description="Capture page content, Markdown, screenshot, and accessibility data")
 async def browser_snapshot(
     url: str,
     no_cache: bool = False,
@@ -589,7 +635,7 @@ async def browser_snapshot(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Scrape specific elements from a web page using CSS selectors")
+@_tool(description="Scrape specific elements from a web page using CSS selectors")
 async def browser_scrape(
     url: str,
     selectors: list[str],
@@ -645,7 +691,7 @@ async def browser_scrape(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=(
         "Extract structured data from a web page using AI "
         "(provide a prompt describing what to extract)"
@@ -718,7 +764,7 @@ async def browser_json(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Extract all links from a web page")
+@_tool(description="Extract all links from a web page")
 async def browser_links(
     url: str,
     include_external: bool = True,
@@ -780,7 +826,7 @@ async def browser_links(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=("Start crawling a website (async – use browser_crawl_status to check progress)")
 )
 async def browser_crawl(
@@ -1093,7 +1139,7 @@ async def browser_crawl(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Check crawl job status. Set wait=True to block until complete.")
+@_tool(description="Check crawl job status. Set wait=True to block until complete.")
 async def browser_crawl_status(
     job_id: str,
     wait: bool = False,
@@ -1133,6 +1179,11 @@ async def browser_crawl_status(
             poll_interval=2.0,
         )
         return json.dumps(result, ensure_ascii=False)
+    except CrawlResultsTimeoutError as e:
+        return json.dumps(
+            {"job_id": job_id, "status": "completed", "_timeout": True, "error": str(e)},
+            ensure_ascii=False,
+        )
     except TimeoutError:
         return json.dumps(
             {"job_id": job_id, "status": "running", "_timeout": True},
@@ -1150,7 +1201,7 @@ async def browser_crawl_status(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(description="Cancel a crawl job and remove cached Worker state")
+@_tool(description="Cancel a crawl job and remove cached Worker state")
 async def browser_delete_crawl(job_id: str) -> str:
     """Cancel the crawl identified by *job_id*."""
     client = get_client()
@@ -1163,7 +1214,7 @@ async def browser_delete_crawl(job_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=(
         "Get the accessibility tree of a web page — structured data for LLM "
         "consumption with lower token cost than HTML"
@@ -1226,9 +1277,7 @@ async def browser_a11y(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
-    description=("Click an element on a web page (requires Worker mode with BROWSER binding)")
-)
+@_tool(description=("Click an element on a web page (requires Worker mode with BROWSER binding)"))
 async def browser_click(
     url: str,
     selector: str,
@@ -1279,7 +1328,7 @@ async def browser_click(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=(
         "Type text into an input field on a web page (requires Worker mode with BROWSER binding)"
     )
@@ -1338,7 +1387,7 @@ async def browser_type(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=(
         "Execute JavaScript on a web page and return the result "
         "(requires Worker mode with BROWSER binding)"
@@ -1395,7 +1444,7 @@ async def browser_evaluate(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=(
         "Execute a chain of browser actions (click, type, wait, screenshot, JS eval) — "
         "the most powerful interaction tool (requires Worker mode with BROWSER binding)"
@@ -1472,7 +1521,7 @@ async def browser_interact(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_tool(
     description=("Fill and submit a form on a web page (requires Worker mode with BROWSER binding)")
 )
 async def browser_submit_form(
