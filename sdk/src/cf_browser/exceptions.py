@@ -33,3 +33,7 @@ class TransportError(CFBrowserError):
 
 class CrawlJobError(CFBrowserError):
     """Raised when a crawl reaches a terminal failure or cancellation state."""
+
+
+class CrawlResultsTimeoutError(TimeoutError):
+    """Raised when a crawl completed but fetching its result pages ran out of time."""

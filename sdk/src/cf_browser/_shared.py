@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .exceptions import CFBrowserError, CrawlJobError
+from .exceptions import CFBrowserError, CrawlJobError, CrawlResultsTimeoutError
 
 CRAWL_PAGE_LIMIT_MAX = 100_000
 CRAWL_CURSOR_INT_MAX = 9_007_199_254_740_991
@@ -403,22 +403,22 @@ async def crawl_wait_poll(
 
     async def before(
         until: float,
-        message: str,
+        error: TimeoutError,
         operation: Callable[[], Awaitable[dict[str, Any]]],
     ) -> dict[str, Any]:
         remaining = until - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError(message)
+            raise error
         try:
             return await asyncio.wait_for(operation(), timeout=remaining)
         except asyncio.TimeoutError as exc:
-            raise TimeoutError(message) from exc
+            raise error from exc
 
     while True:
         if time.monotonic() >= deadline:
             raise TimeoutError(incomplete)
 
-        status_data = await before(deadline, incomplete, lambda: fetch_status(job_id))
+        status_data = await before(deadline, TimeoutError(incomplete), lambda: fetch_status(job_id))
         status = status_data.get("status", "")
 
         if status in ("complete", "completed", "done"):
@@ -428,8 +428,10 @@ async def crawl_wait_poll(
             # fetch its result pages, and a distinct error if that window expires.
             return await before(
                 time.monotonic() + timeout,
-                f"Crawl job {job_id!r} completed, but its results could not be fetched "
-                f"within {timeout}s",
+                CrawlResultsTimeoutError(
+                    f"Crawl job {job_id!r} completed, but its results could not be fetched "
+                    f"within {timeout}s"
+                ),
                 lambda: fetch_final(job_id),
             )
         if status in (

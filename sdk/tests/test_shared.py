@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from cf_browser._shared import collect_crawl_pages, crawl_job_path, crawl_wait_poll
-from cf_browser.exceptions import CFBrowserError, CrawlJobError
+from cf_browser.exceptions import CFBrowserError, CrawlJobError, CrawlResultsTimeoutError
 
 
 @pytest.mark.parametrize("job_id", [".", ".."])
@@ -55,7 +55,9 @@ async def test_result_fetch_timeout_reports_the_completed_job():
         await asyncio.sleep(1)
         return {}
 
-    with pytest.raises(TimeoutError, match="completed, but its results could not be fetched"):
+    with pytest.raises(
+        CrawlResultsTimeoutError, match="completed, but its results could not be fetched"
+    ):
         await crawl_wait_poll(
             "abc", fetch_status, fetch_final=fetch_final, timeout=0.05, poll_interval=0.01
         )
