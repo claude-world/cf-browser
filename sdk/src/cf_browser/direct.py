@@ -19,7 +19,6 @@ from __future__ import annotations
 import math
 import time
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 
@@ -35,9 +34,12 @@ from ._shared import (
     CrawlCursor,
     build_crawl_status_params,
     build_json_extraction_options,
+    build_timeout,
+    crawl_job_path,
     normalize_crawl_status_response,
     validate_crawl_cache_controls,
     validate_common_canonical_options,
+    validate_credential,
 )
 
 _CF_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
@@ -725,8 +727,7 @@ class CFBrowserDirect:
             or any(character.isspace() or character in "/?#" for character in account_id)
         ):
             raise ValueError("account_id must be a non-empty string")
-        if not isinstance(api_token, str) or not api_token:
-            raise ValueError("api_token must be a non-empty string")
+        validate_credential(api_token, "api_token")
         if (
             isinstance(timeout, bool)
             or not isinstance(timeout, (int, float))
@@ -740,7 +741,7 @@ class CFBrowserDirect:
                 "Authorization": f"Bearer {api_token}",
                 "Content-Type": "application/json",
             },
-            timeout=timeout,
+            timeout=build_timeout(timeout),
         )
 
     # ------------------------------------------------------------------
@@ -752,6 +753,9 @@ class CFBrowserDirect:
             response = await self._client.request(method, f"{self._base_url}{endpoint}", **kwargs)
         except httpx.TimeoutException as exc:
             raise TransportError("Cloudflare Browser Run request timed out") from exc
+        except httpx.LocalProtocolError:
+            # Never echo or chain these: their text can quote outgoing header values.
+            raise TransportError("Cloudflare Browser Run request could not be sent") from None
         except httpx.HTTPError as exc:
             raise TransportError(f"Cloudflare Browser Run request failed: {exc}") from exc
         _raise_for_status(response)
@@ -934,10 +938,9 @@ class CFBrowserDirect:
         limit: int | None = None,
         status: str | None = None,
     ) -> dict[str, Any]:
-        if not isinstance(job_id, str) or not job_id:
-            raise ValueError("job_id must be a non-empty string")
+        path = crawl_job_path(job_id)
         params = build_crawl_status_params(cursor, limit, status)
-        data = await self._get_json(f"/crawl/{quote(job_id, safe='')}", params=params or None)
+        data = await self._get_json(path, params=params or None)
         return normalize_crawl_status_response(
             data,
             job_id,
@@ -1007,9 +1010,7 @@ class CFBrowserDirect:
 
     async def delete_crawl(self, job_id: str) -> None:
         """Cancel a crawl job through Cloudflare's REST API."""
-        if not isinstance(job_id, str) or not job_id:
-            raise ValueError("job_id must be a non-empty string")
-        await self._delete(f"/crawl/{quote(job_id, safe='')}")
+        await self._delete(crawl_job_path(job_id))
 
     # ------------------------------------------------------------------
     # Lifecycle

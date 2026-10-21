@@ -66,7 +66,12 @@ async def main():
             width=1440,
             height=900,
         )
-        with open("dashboard-screenshot.png", "wb") as f:
+        # The page is authenticated, so keep the capture private (0600) and never
+        # write through an existing file or symlink.
+        fd = os.open(
+            "dashboard-screenshot.png", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        with os.fdopen(fd, "wb") as f:
             f.write(png)
         print(f"Saved: dashboard-screenshot.png ({len(png)} bytes)")
 

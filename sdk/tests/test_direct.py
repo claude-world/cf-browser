@@ -11,7 +11,12 @@ import pytest
 import respx
 
 from cf_browser import CFBrowserDirect
-from cf_browser.exceptions import AuthenticationError, CFBrowserError, RateLimitError
+from cf_browser.exceptions import (
+    AuthenticationError,
+    CFBrowserError,
+    RateLimitError,
+    TransportError,
+)
 
 ACCOUNT_ID = "test-account-123"
 API_TOKEN = "test-token-456"
@@ -52,6 +57,38 @@ def test_constructor_rejects_invalid_transport_configuration(account_id, timeout
 
 def test_default_transport_timeout_covers_current_synchronous_actions(client):
     assert client._client.timeout.read == 310.0
+
+
+@pytest.mark.parametrize("api_token", [" secret-token", "secret-token\r\n", "secret\ttoken"])
+def test_constructor_rejects_header_unsafe_tokens_without_echoing_them(api_token):
+    with pytest.raises(ValueError, match="visible ASCII") as exc_info:
+        CFBrowserDirect(account_id=ACCOUNT_ID, api_token=api_token)
+    assert "secret" not in str(exc_info.value)
+
+
+def test_connect_timeout_fails_fast_without_shortening_actions(client):
+    assert client._client.timeout.connect == 10.0
+
+
+@pytest.mark.asyncio
+async def test_local_protocol_errors_are_never_echoed(client):
+    with respx.mock:
+        respx.post(f"{CF_BASE}/content").mock(
+            side_effect=httpx.LocalProtocolError("Illegal header value b'Bearer leaked-secret'")
+        )
+        with pytest.raises(TransportError) as exc_info:
+            await client.content("https://example.com")
+    assert "leaked-secret" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [".", ".."])
+async def test_crawl_job_ids_cannot_escape_the_crawl_path(client, job_id):
+    with pytest.raises(ValueError, match="relative path segment"):
+        await client.crawl_status(job_id)
+    with pytest.raises(ValueError, match="relative path segment"):
+        await client.delete_crawl(job_id)
 
 
 # ---------------------------------------------------------------------------

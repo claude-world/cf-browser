@@ -7,9 +7,19 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+
+# The release scripts live in the repository, not in the SDK source distribution.
+pytestmark = pytest.mark.skipif(
+    not (SCRIPTS / "check_versions.py").is_file(),
+    reason="repository release scripts are not available",
+)
+
 
 def load_version_module():
-    script = Path(__file__).resolve().parents[2] / "scripts" / "check_versions.py"
+    script = SCRIPTS / "check_versions.py"
     spec = importlib.util.spec_from_file_location("check_versions", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -18,7 +28,7 @@ def load_version_module():
 
 
 def load_pypi_module():
-    script = Path(__file__).resolve().parents[2] / "scripts" / "check_pypi_dependency.py"
+    script = SCRIPTS / "check_pypi_dependency.py"
     spec = importlib.util.spec_from_file_location("check_pypi_dependency", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -30,9 +30,12 @@ from ._shared import (
     CrawlCursor,
     build_crawl_status_params,
     build_json_extraction_options,
+    build_timeout,
+    crawl_job_path,
     normalize_crawl_status_response,
     validate_crawl_cache_controls,
     validate_common_canonical_options,
+    validate_credential,
 )
 
 DEFAULT_WORKER_TIMEOUT = 320.0
@@ -79,8 +82,12 @@ def _build_payload(url: str, no_cache: bool | None, extras: dict[str, Any]) -> d
     return payload
 
 
-def _decode_json(response: httpx.Response) -> Any:
-    """Decode a successful response without leaking a raw JSON parser error."""
+def _decode_json(response: httpx.Response, *, envelope: bool = True) -> Any:
+    """Decode a successful response without leaking a raw JSON parser error.
+
+    ``envelope=False`` skips the ``success: false`` check for payloads that are
+    caller data rather than a response envelope.
+    """
     try:
         data = response.json()
     except ValueError as exc:
@@ -88,7 +95,7 @@ def _decode_json(response: httpx.Response) -> Any:
             "CF Browser returned an invalid JSON response",
             status_code=response.status_code,
         ) from exc
-    if isinstance(data, dict) and data.get("success") is False:
+    if envelope and isinstance(data, dict) and data.get("success") is False:
         errors = data.get("errors")
         nested_message = (
             errors[0].get("message")
@@ -140,8 +147,7 @@ class CFBrowser:
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("base_url must be a non-empty string")
-        if not isinstance(api_key, str) or not api_key:
-            raise ValueError("api_key must be a non-empty string")
+        validate_credential(api_key, "api_key")
         normalized_base_url = base_url.strip().rstrip("/")
         parsed_base_url = urlsplit(normalized_base_url)
         if (
@@ -165,7 +171,7 @@ class CFBrowser:
         self._base_url = normalized_base_url
         self._client = httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=timeout,
+            timeout=build_timeout(timeout),
         )
 
     # ------------------------------------------------------------------
@@ -177,6 +183,9 @@ class CFBrowser:
             response = await self._client.request(method, f"{self._base_url}{path}", **kwargs)
         except httpx.TimeoutException as exc:
             raise TransportError("CF Browser request timed out") from exc
+        except httpx.LocalProtocolError:
+            # Never echo or chain these: their text can quote outgoing header values.
+            raise TransportError("CF Browser request could not be sent") from None
         except httpx.HTTPError as exc:
             raise TransportError(f"CF Browser request failed: {exc}") from exc
         _raise_for_status(response)
@@ -207,9 +216,9 @@ class CFBrowser:
             )
         return data
 
-    async def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
+    async def _post_json(self, path: str, payload: dict[str, Any], *, envelope: bool = True) -> Any:
         response = await self._request("POST", path, json=payload)
-        return _decode_json(response)
+        return _decode_json(response, envelope=envelope)
 
     async def _get_json(self, path: str, *, params: dict[str, str | int] | None = None) -> Any:
         response = await self._request("GET", path, params=params)
@@ -324,7 +333,9 @@ class CFBrowser:
         """
         extraction = build_json_extraction_options(prompt, response_format, schema, opts)
         payload = _build_payload(url, no_cache, extraction)
-        return await self._post_json("/json", payload)
+        # The Worker returns extracted data unwrapped and reports upstream
+        # failures as non-2xx responses, so ``success: false`` here is page data.
+        return await self._post_json("/json", payload, envelope=False)
 
     async def links(
         self,
@@ -424,12 +435,10 @@ class CFBrowser:
         dict
             Status payload with at minimum ``job_id`` and ``status`` keys.
         """
-        if not isinstance(job_id, str) or not job_id:
-            raise ValueError("job_id must be a non-empty string")
+        path = crawl_job_path(job_id)
         params = build_crawl_status_params(cursor, limit, status)
-        encoded_job_id = quote(job_id, safe="")
         return normalize_crawl_status_response(
-            await self._get_json(f"/crawl/{encoded_job_id}", params=params or None),
+            await self._get_json(path, params=params or None),
             job_id,
             source="CF Browser",
         )
@@ -606,9 +615,7 @@ class CFBrowser:
         job_id:
             The crawl job ID to delete.
         """
-        if not isinstance(job_id, str) or not job_id:
-            raise ValueError("job_id must be a non-empty string")
-        await self._delete(f"/crawl/{quote(job_id, safe='')}")
+        await self._delete(crawl_job_path(job_id))
 
     # ------------------------------------------------------------------
     # Lifecycle

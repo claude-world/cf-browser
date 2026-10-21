@@ -6,6 +6,9 @@ import asyncio
 import math
 import time
 from typing import Any, Awaitable, Callable, TypeGuard
+from urllib.parse import quote
+
+import httpx
 
 from .exceptions import CFBrowserError, CrawlJobError
 
@@ -60,6 +63,35 @@ def _is_valid_crawl_cursor(value: object) -> TypeGuard[CrawlCursor]:
 
 def _is_valid_crawl_records(value: object) -> TypeGuard[list[dict[str, Any]]]:
     return isinstance(value, list) and all(isinstance(record, dict) for record in value)
+
+
+CONNECT_TIMEOUT_MAX = 10.0
+
+
+def validate_credential(value: object, name: str) -> str:
+    """Require a header-safe bearer credential without ever echoing its value."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    if not all("!" <= character <= "~" for character in value):
+        raise ValueError(
+            f"{name} must contain only visible ASCII characters; "
+            "check it for stray whitespace or line breaks"
+        )
+    return value
+
+
+def build_timeout(timeout: float) -> httpx.Timeout:
+    """Allow long synchronous actions while failing fast on unreachable hosts."""
+    return httpx.Timeout(timeout, connect=min(timeout, CONNECT_TIMEOUT_MAX))
+
+
+def crawl_job_path(job_id: object) -> str:
+    """Return the ``/crawl/{job_id}`` path for a validated, single-segment job ID."""
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError("job_id must be a non-empty string")
+    if job_id in {".", ".."}:
+        raise ValueError("job_id must not be a relative path segment")
+    return f"/crawl/{quote(job_id, safe='')}"
 
 
 def build_crawl_status_params(
@@ -131,26 +163,27 @@ async def collect_crawl_pages(
     fetch_page: Callable[[str, CrawlCursor | None], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
     """Fetch every cursor page for a completed crawl and combine its records."""
+    # Malformed pages are upstream response errors, not failed crawl jobs.
     first = await fetch_page(job_id, None)
     result = dict(first)
     records = result.get("records", [])
     if not _is_valid_crawl_records(records):
-        raise CrawlJobError("Crawl result records must be a list of objects", status_code=None)
+        raise CFBrowserError("Crawl result records must be a list of objects", status_code=502)
     combined = list(records)
     seen: set[str] = set()
     cursor = result.get("cursor")
 
     while cursor not in (None, ""):
         if not _is_valid_crawl_cursor(cursor):
-            raise CrawlJobError("Crawl result contained an invalid cursor", status_code=None)
+            raise CFBrowserError("Crawl result contained an invalid cursor", status_code=502)
         cursor_key = str(cursor)
         if cursor_key in seen:
-            raise CrawlJobError("Crawl result contained an invalid cursor", status_code=None)
+            raise CFBrowserError("Crawl result contained an invalid cursor", status_code=502)
         seen.add(cursor_key)
         page = await fetch_page(job_id, cursor)
         page_records = page.get("records", [])
         if not _is_valid_crawl_records(page_records):
-            raise CrawlJobError("Crawl result records must be a list of objects", status_code=None)
+            raise CFBrowserError("Crawl result records must be a list of objects", status_code=502)
         combined.extend(page_records)
         cursor = page.get("cursor")
 
@@ -366,28 +399,38 @@ async def crawl_wait_poll(
         raise ValueError("job_id must be a non-empty string")
 
     deadline = time.monotonic() + timeout
+    incomplete = f"Crawl job {job_id!r} did not complete within {timeout}s"
 
-    async def before_deadline(
+    async def before(
+        until: float,
+        message: str,
         operation: Callable[[], Awaitable[dict[str, Any]]],
     ) -> dict[str, Any]:
-        remaining = deadline - time.monotonic()
+        remaining = until - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError(f"Crawl job {job_id!r} did not complete within {timeout}s")
+            raise TimeoutError(message)
         try:
             return await asyncio.wait_for(operation(), timeout=remaining)
         except asyncio.TimeoutError as exc:
-            raise TimeoutError(f"Crawl job {job_id!r} did not complete within {timeout}s") from exc
+            raise TimeoutError(message) from exc
 
     while True:
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"Crawl job {job_id!r} did not complete within {timeout}s")
+            raise TimeoutError(incomplete)
 
-        status_data = await before_deadline(lambda: fetch_status(job_id))
+        status_data = await before(deadline, incomplete, lambda: fetch_status(job_id))
         status = status_data.get("status", "")
 
         if status in ("complete", "completed", "done"):
-            return (
-                await before_deadline(lambda: fetch_final(job_id)) if fetch_final else status_data
+            if fetch_final is None:
+                return status_data
+            # A job that finishes near the deadline still gets a full window to
+            # fetch its result pages, and a distinct error if that window expires.
+            return await before(
+                time.monotonic() + timeout,
+                f"Crawl job {job_id!r} completed, but its results could not be fetched "
+                f"within {timeout}s",
+                lambda: fetch_final(job_id),
             )
         if status in (
             "failed",

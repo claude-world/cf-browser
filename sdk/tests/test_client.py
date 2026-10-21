@@ -60,6 +60,42 @@ def test_default_transport_timeout_covers_worker_proxy_overhead(client):
     assert client._client.timeout.read == 320.0
 
 
+@pytest.mark.parametrize(
+    "api_key", [" secret-key", "secret-key\n", "secret key", "secret-key\x00", "sécret-key"]
+)
+def test_constructor_rejects_header_unsafe_api_keys_without_echoing_them(api_key):
+    with pytest.raises(ValueError, match="visible ASCII") as exc_info:
+        CFBrowser(base_url=BASE_URL, api_key=api_key)
+    assert "secret" not in str(exc_info.value)
+
+
+def test_connect_timeout_fails_fast_without_shortening_actions(client):
+    assert client._client.timeout.connect == 10.0
+    assert CFBrowser(base_url=BASE_URL, api_key=API_KEY, timeout=3)._client.timeout.connect == 3
+
+
+@pytest.mark.asyncio
+async def test_local_protocol_errors_are_never_echoed(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/content").mock(
+            side_effect=httpx.LocalProtocolError("Illegal header value b'Bearer leaked-secret'")
+        )
+        with pytest.raises(TransportError) as exc_info:
+            await client.content("https://example.com")
+    assert "leaked-secret" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [".", ".."])
+async def test_crawl_job_ids_cannot_escape_the_crawl_path(client, job_id):
+    with pytest.raises(ValueError, match="relative path segment"):
+        await client.crawl_status(job_id)
+    with pytest.raises(ValueError, match="relative path segment"):
+        await client.delete_crawl(job_id)
+
+
 # ---------------------------------------------------------------------------
 # content()
 # ---------------------------------------------------------------------------
@@ -338,6 +374,16 @@ async def test_json_extract_returns_dict(client):
     assert result["name"] == "John"
     sent = json.loads(route.calls[0].request.content)
     assert sent["prompt"] == "Extract name and age"
+
+
+@pytest.mark.asyncio
+async def test_json_extract_returns_page_data_with_a_success_false_field(client):
+    with respx.mock:
+        respx.post(f"{BASE_URL}/json").mock(
+            return_value=httpx.Response(200, json={"success": False, "message": "Declined"})
+        )
+        result = await client.json_extract("https://example.com", prompt="Extract payment state")
+    assert result == {"success": False, "message": "Declined"}
 
 
 @pytest.mark.asyncio
