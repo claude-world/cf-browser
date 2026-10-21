@@ -5,6 +5,7 @@ checks drive the server through an in-process ``mcp.Client``.
 """
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -340,8 +341,10 @@ def test_artifact_quota_evicts_old_files_and_rejects_oversized(monkeypatch):
 
     first = Path(server_module._write_artifact("https://example.com", b"1111", ".png"))
     second = Path(server_module._write_artifact("https://example.com", b"22", ".png"))
-    first.touch()
-    second.touch()
+    # Explicit timestamps: back-to-back touch() calls can share one coarse
+    # filesystem clock tick, which would make the eviction order arbitrary.
+    os.utime(first, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(second, ns=(2_000_000_000, 2_000_000_000))
     third = Path(server_module._write_artifact("https://example.com", b"3333", ".png"))
 
     assert not first.exists()
