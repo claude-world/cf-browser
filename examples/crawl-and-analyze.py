@@ -9,22 +9,31 @@ Prerequisites:
 """
 
 import asyncio
-import json
 import os
 
 from cf_browser import CFBrowser
 
 
 async def main():
-    url = os.environ.get("CF_BROWSER_URL", "https://cf-browser.example.workers.dev")
-    key = os.environ.get("CF_BROWSER_API_KEY", "your-api-key")
+    try:
+        url = os.environ["CF_BROWSER_URL"]
+        key = os.environ["CF_BROWSER_API_KEY"]
+    except KeyError as exc:
+        raise SystemExit(
+            f"Set the required environment variable: {exc.args[0]}"
+        ) from exc
 
     async with CFBrowser(base_url=url, api_key=key) as browser:
         # Start a crawl (async — returns immediately)
         print("Starting crawl...")
         job_id = await browser.crawl(
-            "https://example.com",
+            "https://example.com/docs/",
             limit=10,  # max pages to crawl
+            depth=2,
+            formats=["markdown"],
+            crawl_purposes=["search"],
+            include_patterns=["**/docs/**"],
+            exclude_patterns=["**/private/**"],
         )
         print(f"Job ID: {job_id}")
 
@@ -32,16 +41,16 @@ async def main():
         print("Waiting for crawl to complete...")
         result = await browser.crawl_wait(
             job_id,
-            timeout=120,       # max 2 minutes
-            poll_interval=3,   # check every 3 seconds
+            timeout=120,  # max 2 minutes
+            poll_interval=3,  # check every 3 seconds
         )
 
         print(f"Status: {result.get('status')}")
-        pages = result.get("pages", [])
-        print(f"Pages crawled: {len(pages)}")
+        records = result.get("records", [])
+        print(f"Records crawled: {len(records)}")
 
-        for page in pages[:5]:
-            print(f"  - {page.get('url', 'N/A')}")
+        for record in records[:5]:
+            print(f"  - {record.get('url', 'N/A')}")
 
 
 if __name__ == "__main__":

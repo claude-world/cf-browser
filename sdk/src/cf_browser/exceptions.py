@@ -21,3 +21,15 @@ class RateLimitError(CFBrowserError):
 
 class NotFoundError(CFBrowserError):
     """Raised when the requested resource is not found (HTTP 404)."""
+
+
+class BrowserUnavailableError(CFBrowserError):
+    """Raised when Worker browser interaction is not configured (HTTP 501)."""
+
+
+class TransportError(CFBrowserError):
+    """Raised when an HTTP request cannot reach the configured service."""
+
+
+class CrawlJobError(CFBrowserError):
+    """Raised when a crawl reaches a terminal failure or cancellation state."""

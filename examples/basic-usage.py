@@ -17,8 +17,13 @@ from cf_browser import CFBrowser
 
 
 async def main():
-    url = os.environ.get("CF_BROWSER_URL", "https://cf-browser.example.workers.dev")
-    key = os.environ.get("CF_BROWSER_API_KEY", "your-api-key")
+    try:
+        url = os.environ["CF_BROWSER_URL"]
+        key = os.environ["CF_BROWSER_API_KEY"]
+    except KeyError as exc:
+        raise SystemExit(
+            f"Set the required environment variable: {exc.args[0]}"
+        ) from exc
 
     async with CFBrowser(base_url=url, api_key=key) as browser:
         # 1. Read a page as Markdown (best for LLM consumption)
