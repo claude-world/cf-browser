@@ -13,8 +13,10 @@ node_modules/
 # Cloudflare
 .wrangler/
 .dev.vars
+.mcp.json
 wrangler.toml
 wrangler.local.toml
+wrangler.toml.*.bak
 
 # IDE
 .vscode/

@@ -1,5 +1,8 @@
 name: Publish to PyPI
 
+permissions:
+  contents: read
+
 on:
   release:
     types: [published]
@@ -18,26 +21,47 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          python-version: '3.12'
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          node-version: '20'
+          python-version: '3.13'
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Check component versions
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            python scripts/check_versions.py --tag "$RELEASE_TAG"
+          else
+            python scripts/check_versions.py
+          fi
+
+      - name: Require the SDK on PyPI for MCP-only publication
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.package == 'mcp-server'
+        run: python scripts/check_pypi_dependency.py
 
       - name: Test SDK
         working-directory: sdk
         run: |
           pip install -e ".[dev]"
-          pytest tests/ -v
+          ruff format --check src tests ../examples ../scripts
+          ruff check src tests ../examples ../scripts
+          mypy src
+          pytest tests/ -q
 
       - name: Test Worker
         working-directory: worker
         run: |
-          npm install
+          npm ci
+          npm audit --audit-level=high
           npm run type-check
           npm test
 
@@ -46,7 +70,44 @@ jobs:
         run: |
           pip install -e ../sdk
           pip install -e ".[dev]"
-          pytest tests/ -v
+          ruff format --check src tests
+          ruff check src tests
+          mypy src
+          pytest tests/ -q
+
+      - name: Validate setup script
+        run: |
+          bash -n setup.sh
+          shellcheck setup.sh scripts/test_setup.sh
+          bash scripts/test_setup.sh
+
+      - name: Build and verify SDK artifact
+        run: |
+          python -m build sdk
+          python -m twine check sdk/dist/*
+          python scripts/verify_python_dist.py sdk --require-py-typed
+
+      - name: Build and verify MCP artifact
+        run: |
+          python -m build mcp-server
+          python -m twine check mcp-server/dist/*
+          python scripts/verify_python_dist.py mcp-server
+
+      - name: Upload SDK artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: sdk-dist
+          path: sdk/dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload MCP artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mcp-dist
+          path: mcp-server/dist/*
+          if-no-files-found: error
+          retention-days: 1
 
   publish-sdk:
     needs: test
@@ -56,25 +117,19 @@ jobs:
       github.event.inputs.package == 'sdk'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Download verified SDK artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          python-version: '3.12'
-
-      - name: Install build tools
-        run: pip install build
-
-      - name: Build SDK
-        working-directory: sdk
-        run: python -m build
+          name: sdk-dist
+          path: sdk-dist
 
       - name: Publish SDK to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
-          packages-dir: sdk/dist/
+          packages-dir: sdk-dist/
 
   publish-mcp-server:
     needs: [test, publish-sdk]
@@ -88,22 +143,16 @@ jobs:
        github.event.inputs.package == 'mcp-server')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Download verified MCP artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          python-version: '3.12'
-
-      - name: Install build tools
-        run: pip install build
-
-      - name: Build MCP Server
-        working-directory: mcp-server
-        run: python -m build
+          name: mcp-dist
+          path: mcp-dist
 
       - name: Publish MCP Server to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
-          packages-dir: mcp-server/dist/
+          packages-dir: mcp-dist/
