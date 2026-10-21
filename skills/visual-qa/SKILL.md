@@ -1,7 +1,7 @@
 ---
 name: visual-qa
 description: Multi-viewport visual QA — screenshot pages at multiple device sizes and compare
-user_invocable: true
+user-invocable: true
 ---
 
 # Visual QA
@@ -10,7 +10,7 @@ Automated visual quality assurance using multi-viewport screenshots.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
+CF Browser MCP server must be configured (see the [CF Browser quick start](https://github.com/claude-world/cf-browser#quick-start)).
 
 ## Workflow
 
@@ -37,7 +37,8 @@ Default viewports (user can override):
 For each page + viewport combination:
 ```
 browser_screenshot(url, width=W, height=H)
-→ Save PNG to screenshots/{page-slug}/{viewport-name}.png
+→ Inspect the returned private temporary PNG
+→ If persistent artifacts were requested, copy it to screenshots/{page-slug}/{viewport-name}.png before the MCP process exits
 ```
 
 Process in batches to respect rate limits (4 viewports per page, pause between pages).

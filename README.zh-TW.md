@@ -1,138 +1,36 @@
 # CF Browser
 
-> 開源工具，為 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 提供 **15 個 MCP 工具 + 6 個即用 Skill**，支援 JavaScript 渲染的網頁與瀏覽器互動。
+透過 [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/)（原 Browser Rendering）在 Python 或 Claude Code 讀取 JS 渲染頁面。專案包含 typed async SDK、可部署的 Worker proxy、**17 個 MCP 工具**與 6 個 Skill，支援 Markdown、HTML、截圖、PDF、結構化擷取、crawl、無障礙樹與瀏覽器互動。
 
 **[English README](README.md)**
 
-Claude Code 內建的 `WebFetch` 只能取得原始 HTML — 單頁應用程式（SPA）、動態內容和 JS 渲染的頁面都會回傳空白。CF Browser 透過 [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) 解決這個問題，支援兩種模式：**直連模式**（免部署，唯讀）和 **Worker 模式**（含快取、限流與瀏覽器互動）。
-
-## 架構
-
-```
-                          ┌─────────────────────┐
-                          │     Claude Code      │
-                          └──────────┬───────────┘
-                                     │
-                          ┌──────────▼───────────┐
-                          │ MCP Server（15 個工具）│
-                          └──────────┬───────────┘
-                                     │
-                    ┌────────────────┴────────────────┐
-                    │                                  │
-              直連模式                           Worker 模式
-            (CF_ACCOUNT_ID                     (CF_BROWSER_URL
-             + CF_API_TOKEN)                    + CF_BROWSER_API_KEY)
-                    │                                  │
-                    │                    ┌─────────────▼──────────────┐
-                    │                    │   Cloudflare Worker        │
-                    │                    │  ├── 認證（timing-safe）    │
-                    │                    │  ├── 速率限制（KV）         │
-                    │                    │  └── 快取（KV + R2）        │
-                    │                    └─────────────┬──────────────┘
-                    │                                  │
-                    └────────────────┬─────────────────┘
-                                     │
-                          ┌──────────▼───────────┐
-                          │ CF Browser Rendering │
-                          │   API（無頭 Chrome）  │
-                          └──────────────────────┘
-```
-
-| 套件 | 語言 | 用途 |
-|------|------|------|
-| `worker/` | TypeScript (Hono) | Edge 代理，含認證、快取、速率限制與瀏覽器互動 |
-| `sdk/` | Python (httpx) | 非同步客戶端函式庫 |
-| `mcp-server/` | Python (FastMCP) | 15 個 MCP 工具供 Claude Code 使用 |
-
-## MCP 工具
-
-### 唯讀工具（直連 + Worker 模式）
-
-| 工具 | 輸入 | 輸出 | 使用情境 |
-|------|------|------|----------|
-| `browser_markdown` | url | Markdown | 將任何網頁轉為乾淨的文字 |
-| `browser_content` | url | HTML | 取得完整渲染的 HTML（JS 已執行） |
-| `browser_screenshot` | url, width, height | PNG 檔案 | 視覺驗證、多裝置測試 |
-| `browser_pdf` | url, format | PDF 檔案 | 產生報告、封存頁面 |
-| `browser_scrape` | url, selectors[] | `{"elements":[...]}` | 以 CSS 選擇器擷取特定元素並正規化結果 |
-| `browser_json` | url, prompt | JSON | AI 驅動的結構化資料擷取 |
-| `browser_links` | url | `[{href, text}]` | 發現頁面上所有超連結 |
-| `browser_a11y` | url | JSON | 無障礙導向快照，已移除截圖資料 |
-| `browser_crawl` | url, limit | `{"job_id","status"}` | 啟動非同步多頁面爬取 |
-| `browser_crawl_status` | job_id, wait | JSON | 輪詢或等待爬取結果 |
-
-### 互動工具（僅 Worker 模式 — 需要 BROWSER 綁定）
-
-| 工具 | 輸入 | 輸出 | 使用情境 |
-|------|------|------|----------|
-| `browser_click` | url, selector | JSON | 點擊按鈕/連結，取得結果頁面 |
-| `browser_type` | url, selector, text | JSON | 在輸入框中輸入文字 |
-| `browser_evaluate` | url, script | JSON | 執行 JavaScript 並取得回傳值 |
-| `browser_interact` | url, actions[] | JSON | 串接多個動作（點擊、輸入、等待、截圖等） |
-| `browser_submit_form` | url, fields | JSON | 一次填寫並提交表單 |
-
-所有工具都接受可選的 `cookies`、`headers`、`wait_for`、`wait_until` 和 `user_agent` 參數。對 SPA 網站（React、Next.js、X/Twitter）使用 `wait_until="networkidle0"` 確保完整渲染。
-
-### 在 Claude Code 中可以這樣問
-
-```
-「幫我讀 React 19 遷移指南」
-→ browser_markdown("https://react.dev/blog/2024/12/05/react-19")
-
-「我們首頁在手機上長怎樣？」
-→ browser_screenshot("https://example.com", width=375, height=667)
-
-「擷取前 5 個產品的名稱、價格和評分」
-→ browser_json("https://example.com/products", prompt="Extract top 5 products...")
-
-「取得頁面結構做無障礙分析」
-→ browser_a11y("https://example.com")
-
-「擷取需要登入的儀表板」
-→ browser_markdown("https://app.example.com/dashboard", cookies='[{"name":"session","value":"abc"}]')
-
-「檢查我們網站有沒有壞掉的連結」
-→ browser_crawl("https://example.com", limit=50) + browser_crawl_status(job_id, wait=True)
-
-「登入測試環境並檢查儀表板」
-→ browser_interact("https://staging.example.com/login", actions=[
-    {"action":"type", "selector":"#email", "text":"admin@example.com"},
-    {"action":"type", "selector":"#password", "text":"secret"},
-    {"action":"click", "selector":"button[type=submit]"},
-    {"action":"wait", "selector":".dashboard"},
-    {"action":"screenshot"}
-  ])
-
-「填寫聯絡表單」
-→ browser_submit_form("https://example.com/contact",
-    fields={"#name":"Claude", "#email":"claude@example.com", "#message":"你好！"},
-    submit_selector="button.submit")
-```
-
-## 安裝設定
-
-兩種使用方式 — 選適合你的：
+## 選擇模式
 
 | | 直連模式 | Worker 模式 |
 |---|---|---|
-| **設定** | `pip install` + 2 個環境變數 | 部署 Worker + `pip install` |
-| **上手時間** | 2 分鐘 | 10 分鐘 |
-| **需要什麼** | CF Account ID + API Token | Worker + KV + R2 |
-| **可用工具** | 10 個唯讀工具 | 完整 15 個工具 |
-| **快取** | 無 | KV + R2（省 ~70% API 配額） |
-| **速率限制** | 無 | 每 key 60 req/min |
-| **多用戶** | 否（共用你的 CF 憑證） | 是（每個用戶獨立 API key） |
-| **適合** | 個人使用、快速上手 | 團隊、生產環境、高流量 |
+| 呼叫方式 | Cloudflare REST API | 你部署的認證 Worker |
+| 設定 | 兩個 Cloudflare 憑證 | Worker、KV、R2、native rate limiter |
+| MCP 工具 | 12 個唯讀/crawl 工具 | 完整 17 個工具 |
+| 快取 | 無 | KV + R2，強制 TTL |
+| 限流 | Cloudflare 帳號限制 | 每 key、每 location 每分鐘 60 次 |
+| 互動 | 不支援 | 點擊、輸入、JS、action chain、表單 |
 
-### 方案 A：直連模式（免部署 Worker）
+若兩組憑證都存在，必須明確設定 `CF_BROWSER_MODE=direct` 或 `worker`，避免不小心使用錯誤帳號。
 
-直接呼叫 Cloudflare Browser Rendering API — 不需要部署任何東西。
+## 快速開始
+
+### 直連模式
+
+建立具有「帳戶 → Browser Run（Browser Rendering）→ 編輯」權限的 API token：
 
 ```bash
-pip install cf-browser cf-browser-mcp
+python -m pip install cf-browser cf-browser-mcp
+export CF_BROWSER_MODE=direct
+export CF_ACCOUNT_ID="你的-account-id"
+export CF_API_TOKEN="你的-browser-rendering-token"
 ```
 
-在你專案的 `.mcp.json` 加入：
+Claude Code 的 `.mcp.json` 建議只引用環境變數，不要放 literal secret：
 
 ```json
 {
@@ -142,402 +40,236 @@ pip install cf-browser cf-browser-mcp
       "command": "python3",
       "args": ["-m", "cf_browser_mcp.server"],
       "env": {
-        "CF_ACCOUNT_ID": "<你的帳號-ID>",
-        "CF_API_TOKEN": "<你的-API-Token>"
+        "CF_BROWSER_MODE": "direct",
+        "CF_ACCOUNT_ID": "${CF_ACCOUNT_ID}",
+        "CF_API_TOKEN": "${CF_API_TOKEN}"
       }
     }
   }
 }
 ```
 
-取得憑證：
-- **Account ID**：`wrangler whoami` 或 [Cloudflare Dashboard](https://dash.cloudflare.com) → 任意域名 → 概覽 → 右側欄
-- **API Token**：[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) → 建立 Token → 使用「編輯 Cloudflare Workers」模板
+直連模式支援所有唯讀 Quick Actions、crawl 查詢/分頁/等待/取消。五個互動工具會回傳明確的模式提示。
 
-重啟 Claude Code 後，10 個唯讀工具可立即使用；另外 5 個互動工具需要 Worker 模式。
+### Worker 模式
 
-### 方案 B：Worker 模式（含快取與限流）
-
-部署 Worker 作為 Edge 代理。
+需求：Node.js 22+、Python 3.10+、已登入 Wrangler，以及啟用 Browser Run 的 Cloudflare 帳號。
 
 ```bash
 git clone https://github.com/claude-world/cf-browser.git
 cd cf-browser
+cd worker && npx wrangler login && cd ..
 bash setup.sh
 ```
 
-<details>
-<summary>展開手動部署步驟</summary>
+`setup.sh` 會建立或重用 KV/R2、安裝實體 R2 expiration、把每個資源操作固定到選定帳號、設定 native rate limiter 與 secrets、部署 Worker、執行 readiness 與帶認證的 Markdown live smoke test、建立隔離 Python 環境，並在可用時註冊 Claude Code user-scope MCP。腳本會先備份既有的 `worker/wrangler.toml` 並保留 native rate-limit namespace ID，不會把 API key 印到終端；所有 Worker secrets 會透過單一私密暫存檔隨部署送出，備援設定則以 `0600` 儲存在 `$XDG_CONFIG_HOME/cf-browser/mcp.json` 或 `~/.config/cf-browser/mcp.json`。
 
-### 方案 B（手動）：自行部署 Worker（5 分鐘）
-
-#### 前置需求
-
-- Node.js 18+、Python 3.10+
-- 已啟用 [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) 的 Cloudflare 帳號
-- `wrangler` CLI（`npm i -g wrangler && wrangler login`）
-
-#### 步驟 1：部署 Worker
+若只需要唯讀端點、沒有 Workers Paid 的 browser binding：
 
 ```bash
-git clone https://github.com/claude-world/cf-browser.git
-cd cf-browser/worker
+CF_BROWSER_ENABLE_INTERACTIONS=0 bash setup.sh
+```
+
+#### 手動部署
+
+```bash
+cd worker
 cp wrangler.toml.example wrangler.toml
-npm install
+npm ci
+
+npx wrangler kv namespace create CACHE
+# 將回傳 ID 貼入 wrangler.toml
+npx wrangler r2 bucket create cf-browser-storage
+npx wrangler r2 bucket lifecycle add cf-browser-storage cf-browser-expire-after-8-days --expire-days 8 --force
+# 為 ratelimits.namespace_id 選擇帳號內唯一的正整數
+
+npx wrangler secret put CF_ACCOUNT_ID
+npx wrangler secret put CF_API_TOKEN
+CF_BROWSER_API_KEY="$(openssl rand -hex 32)"
+printf '%s' "$CF_BROWSER_API_KEY" | npx wrangler secret put API_KEYS
+
+npm audit --audit-level=high
+npm run type-check
+npm test
+npx wrangler deploy
 ```
 
-建立資源並將 namespace ID 貼入 `wrangler.toml`：
+`CF_API_TOKEN` 是給 Worker 呼叫 Browser Run API（權限名稱可能仍顯示 Browser Rendering）；管理 R2 lifecycle 另需 Workers R2 Storage Write 權限。關閉 shell 前，請把 `CF_BROWSER_API_KEY` 存入密碼管理器或 client 設定；Cloudflare 之後無法顯示已儲存的 secret。資源建立與部署由 Wrangler 登入授權。若不需要互動工具，可移除 `[browser]` 設定。
 
-```bash
-wrangler kv namespace create CACHE
-wrangler kv namespace create RATE_LIMIT
-wrangler r2 bucket create cf-browser-storage
-```
+## MCP 工具
 
-設定密鑰：
+### 唯讀與 crawl（兩種模式）
 
-```bash
-# 帳號 ID（透過 wrangler whoami 查看）
-wrangler secret put CF_ACCOUNT_ID
+| 工具 | 主要參數 | 回傳 |
+|---|---|---|
+| `browser_content` | `url` | 渲染後 HTML |
+| `browser_markdown` | `url` | Markdown |
+| `browser_screenshot` | `url`, `width`, `height`, `full_page` | 私有暫存 PNG 路徑 |
+| `browser_pdf` | `url`, `format`, `landscape` | 私有暫存 PDF 路徑 |
+| `browser_snapshot` | `url` | content、Markdown、screenshot、可選 a11y tree |
+| `browser_scrape` | `url`, `selectors[]` | 正規化 selector 結果 |
+| `browser_json` | `url`, `prompt?`, `response_format?` | AI 擷取 JSON |
+| `browser_links` | `url`, `include_external`, `visible_only` | 正規化連結 |
+| `browser_a11y` | `url` | Cloudflare native accessibility tree |
+| `browser_crawl` | `url`, `limit` 與 crawl options | Job ID |
+| `browser_crawl_status` | `job_id`, `wait`、cursor/filter | 狀態或 records |
+| `browser_delete_crawl` | `job_id` | 取消結果 |
 
-# API token — 在 https://dash.cloudflare.com/profile/api-tokens 建立
-# 所需權限：帳戶 → Workers 瀏覽器轉譯 → 編輯
-wrangler secret put CF_API_TOKEN
+唯讀工具接受 structured `cookies`、`headers`、HTTP Basic `authenticate`、script/style tags、`wait_for`、`wait_until`、`user_agent`、導航 `timeout`（毫秒）與 `no_cache`。Crawl 預設會 render，並支援 `depth`、`formats`、`crawl_purposes`、上游 `cache_ttl`、時間篩選、include/exclude patterns、JSON 擷取與 request/resource/JavaScript/viewport controls；MCP 可使用簡化欄位或完整 `goto_options`、`wait_for_selector`、`viewport` 物件。`render=false` 會拒絕 browser-only options。
 
-# 產生客戶端 API key（記下來，.mcp.json 會用到）
-echo "$(openssl rand -hex 32)" | wrangler secret put API_KEYS
-```
+### 互動工具（僅 Worker）
 
-部署：
+| 工具 | 主要參數 | 回傳 |
+|---|---|---|
+| `browser_click` | `url`, `selector` | 點擊後頁面狀態 |
+| `browser_type` | `url`, `selector`, `text`, `clear` | 輸入後頁面狀態 |
+| `browser_evaluate` | `url`, `script` | JSON 可序列化結果 |
+| `browser_interact` | `url`, structured `actions[]` | 每個 action 結果 |
+| `browser_submit_form` | `url`, structured `fields`, `submit_selector?` | 提交後頁面狀態 |
 
-```bash
-wrangler deploy
-# → https://cf-browser.<your-subdomain>.workers.dev
-```
+互動端點需要 `BROWSER` binding。未設定時回傳 HTTP 501 並映射為 `BrowserUnavailableError`；直連模式則使用 `NotImplementedError`。
 
-驗證：
+## Worker API
 
-```bash
-curl https://cf-browser.<your-subdomain>.workers.dev/health
-# {"status":"ok","version":"2.0.1","capabilities":{"interact":false}}
-```
+除了 `/health`，所有路由都需要 `Authorization: Bearer <API_KEY>`。
 
-#### 步驟 2：安裝 SDK + MCP Server
+| 路由 | 方法 | 重點欄位 | 快取/行為 |
+|---|---|---|---|
+| `/health` | GET | — | readiness、版本、capabilities |
+| `/content` | POST | `url`、共用選項 | KV 1 小時 |
+| `/markdown` | POST | `url`、共用選項 | KV 1 小時 |
+| `/screenshot` | POST | `url`, `width?`, `height?`, `full_page?` | R2 24 小時 |
+| `/pdf` | POST | `url`, `format?`, `landscape?` | R2 24 小時 |
+| `/snapshot` | POST | `url`、共用選項 | R2 JSON 30 分鐘 |
+| `/scrape` | POST | `url`、非空 `elements[]` | KV 30 分鐘 |
+| `/json` | POST | `url` 與 `prompt` 或 `response_format` | 本地不快取 |
+| `/links` | POST | `url`, `include_external?`, `visible_only?` | KV 1 小時 |
+| `/a11y` | POST | `url`、共用選項 | KV 5 分鐘 |
+| `/crawl` | POST | `url`, `limit?`, `cache_ttl?`, `depth?`、formats/purposes/patterns 與 render options | 建立工作 |
+| `/crawl/:id` | GET | `cursor?`, `limit?`, record `status?` | 完整結果存 R2 |
+| `/crawl/:id` | DELETE | — | 取消上游工作並清本地狀態 |
+| 五個互動路由 | POST | route-specific | 不快取 |
 
-```bash
-cd ../sdk && pip install -e .
-cd ../mcp-server && pip install -e .
-```
+`/health` 是 readiness，不只是 process liveness。缺少核心 binding 時回 HTTP 503 與 `status: "degraded"`；`capabilities.interact` 表示是否有 `BROWSER`。
 
-#### 步驟 3：註冊 MCP
+### JSON schema
 
-在你專案的 `.mcp.json` 加入：
+Cloudflare 現行欄位是 `response_format`。Worker 與 SDK 保留舊 `schema=` 相容入口，但送出前會轉成新格式：
 
 ```json
 {
-  "mcpServers": {
-    "cf-browser": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["-m", "cf_browser_mcp.server"],
-      "env": {
-        "CF_BROWSER_URL": "https://cf-browser.<your-subdomain>.workers.dev",
-        "CF_BROWSER_API_KEY": "<你產生的-api-key>"
-      }
+  "url": "https://example.com/products",
+  "prompt": "擷取產品",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "products": {"type": "array", "items": {"type": "object"}}
+      },
+      "required": ["products"]
     }
   }
 }
 ```
 
-重啟 Claude Code — 15 個 `browser_*` 工具即可使用。
+### Crawl 語意
 
-</details>
+- 相容 `complete`、`completed`、`done` 成功狀態。
+- 現行錯誤/取消狀態會拋出 `CrawlJobError`。
+- 等待時以 `limit=1` 輪詢，完成後追完所有 cursor 並合併完整 records。
+- Cursor 是 opaque string 或非負整數；分頁結果不會污染完整結果快取。
+- 每個 crawl 綁定建立它的 API key；其他有效 key 會得到 404。
+- Owner metadata 與完成結果七天後邏輯失效；setup 另安裝八天 R2 lifecycle，確保從未再讀取的物件也會實體刪除。
+- `DELETE` 真的取消 Cloudflare 工作，不只是刪快取。
 
-## Worker API 參考
+### 快取與限流
 
-所有路由（除了 `/health`）都需要 `Authorization: Bearer <api-key>` 標頭。
+`no_cache: true` 會略過本地快取讀寫；建立 crawl 時也會送出 Cloudflare `cacheTTL=0`。可用 `cache_ttl`（0–86400 秒）獨立控制上游 crawl cache。文字使用 KV；binary 與大型 snapshot JSON 使用 R2。R2 TTL 會在讀取時強制執行，setup 安裝的 bucket lifecycle 也會實體刪除未再讀取的物件。
 
-### 端點
-
-| 路由 | 方法 | 請求體 | 快取 | 回應 |
-|------|------|--------|------|------|
-| `/health` | GET | — | — | `{"status":"ok","version":"2.0.1","capabilities":{"interact":...}}` |
-| `/content` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | HTML |
-| `/markdown` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | Markdown |
-| `/screenshot` | POST | `{url, width?, height?, full_page?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PNG |
-| `/pdf` | POST | `{url, format?, landscape?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | R2 24hr | PDF |
-| `/snapshot` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | JSON |
-| `/scrape` | POST | `{url, elements[], wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 30min | `{"elements":[...]}` |
-| `/json` | POST | `{url, prompt, schema?, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | 無 | JSON |
-| `/links` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 1hr | `[{href, text}]` |
-| `/a11y` | POST | `{url, wait_for?, wait_until?, user_agent?, cookies?, headers?, no_cache?}` | KV 5min | `{"type":"accessibility_snapshot", ...}` |
-| `/crawl` | POST | `{url, limit?, user_agent?, cookies?, headers?, no_cache?}` | — | `{"job_id":"..."}` |
-| `/crawl/:id` | GET | — | R2 | JSON |
-| `/crawl/:id` | DELETE | — | — | 204 |
-| `/click` | POST | `{url, selector, wait_for?, ...}` | 無 | JSON |
-| `/type` | POST | `{url, selector, text, clear?, ...}` | 無 | JSON |
-| `/evaluate` | POST | `{url, script, ...}` | 無 | JSON |
-| `/interact` | POST | `{url, actions[], ...}` | 無 | JSON |
-| `/submit-form` | POST | `{url, fields, submit_selector?, ...}` | 無 | JSON |
-
-互動路由（`/click`、`/type`、`/evaluate`、`/interact`、`/submit-form`）需要 `BROWSER` 綁定。未設定時回傳 501。若這些路由回傳 404，表示你目前指向的是舊版 Worker，請重新部署並確認 `/health` 顯示 `version: "2.0.1"`。
-
-目前 Worker、SDK 與 MCP 會統一正規化以下回應格式：
-
-- `/scrape` 會回傳 `{"elements":[{"selector":"...", "results":[...]}]}`。
-- `/links` 會回傳 `{href, text}` 物件陣列；若上游只有字串 URL，會自動補成 `{href, text: null}`。
-- `/a11y` 來自 `/snapshot`，會移除 base64 截圖並加上 `type: "accessibility_snapshot"`。
-
-### 請求範例
-
-```bash
-# 取得 Markdown
-curl -X POST https://cf-browser.example.workers.dev/markdown \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://react.dev"}'
-
-# 自訂視窗大小截圖
-curl -X POST https://cf-browser.example.workers.dev/screenshot \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "width": 1280, "height": 720}' \
-  -o screenshot.png
-
-# AI 驅動的結構化擷取
-curl -X POST https://cf-browser.example.workers.dev/json \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://news.ycombinator.com", "prompt": "Extract top 5 stories with title and score"}'
-
-# 擷取特定元素
-curl -X POST https://cf-browser.example.workers.dev/scrape \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "elements": ["h1", ".price", "#main"]}'
-
-# 啟動非同步爬取
-curl -X POST https://cf-browser.example.workers.dev/crawl \
-  -H "Authorization: Bearer YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "limit": 10}'
-
-# 查詢爬取狀態
-curl https://cf-browser.example.workers.dev/crawl/JOB_ID \
-  -H "Authorization: Bearer YOUR_KEY"
-```
-
-### 快取行為
-
-- 在請求體中設定 `"no_cache": true` 可繞過快取
-- 快取命中的回應會包含 `X-Cache: HIT` 標頭
-- 文字內容（HTML、Markdown、JSON）→ KV 儲存
-- 二進位內容（PNG、PDF）→ R2 儲存
-- 完成的爬取結果會持久化到 R2
-
-### 速率限制
-
-- 預設：每個 API key 每分鐘 60 次請求
-- 回應標頭：`X-RateLimit-Limit`、`X-RateLimit-Remaining`
-- 超過限制：HTTP 429，附帶 `Retry-After` 標頭
+Native Cloudflare Rate Limiting binding 以 API key SHA-256 雜湊作 key，在每個 Cloudflare location 執行每 60 秒 60 次。429 回應包含 `Retry-After`、`X-RateLimit-Limit` 與 `X-RateLimit-Remaining: 0`；成功回應不偽造全域精確 remaining counter。
 
 ## Python SDK
 
 ```python
-# 直連模式 — 免部署 Worker
-from cf_browser import CFBrowserDirect
+from cf_browser import CFBrowser, CFBrowserDirect
 
-async with CFBrowserDirect(
-    account_id="your-cf-account-id",
-    api_token="your-cf-api-token",
-) as browser:
-    md = await browser.markdown("https://example.com")
+async with CFBrowserDirect(account_id="...", api_token="...") as browser:
+    markdown = await browser.markdown("https://example.com")
 
-# Worker 模式 — 透過已部署的 Worker
-from cf_browser import CFBrowser
-
-async with CFBrowser(
-    base_url="https://cf-browser.example.workers.dev",
-    api_key="your-key",
-) as browser:
-    # 讀取頁面
-    markdown = await browser.markdown("https://react.dev")
-
-    # 截圖
-    png_bytes = await browser.screenshot("https://example.com", width=1280, height=720)
-
-    # AI 驅動的擷取
+async with CFBrowser(base_url="https://...workers.dev", api_key="...") as browser:
+    tree = await browser.a11y("https://example.com", no_cache=True)
     data = await browser.json_extract(
-        "https://news.ycombinator.com",
-        prompt="Extract the top 5 stories with title and score",
+        "https://example.com/products",
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "type": "object",
+                "properties": {"products": {"type": "array"}},
+            },
+        },
     )
-
-    # 以 CSS 選擇器擷取
-    elements = await browser.scrape("https://example.com", selectors=["h1", ".price"])
-
-    # 非同步爬取
-    job_id = await browser.crawl("https://example.com", limit=10)
-    result = await browser.crawl_wait(job_id, timeout=120)
+    job_id = await browser.crawl("https://example.com", limit=20, cache_ttl=3600)
+    result = await browser.crawl_wait(job_id, timeout=300, poll_interval=2)
+    await browser.delete_crawl(job_id)
 ```
 
-### SDK 方法
+SDK 內含 `py.typed`、typed HTTP exceptions、分離的 `TransportError`/`CrawlJobError`、安全編碼的 crawl ID，以及一致的 link/scrape normalizer。詳見 [sdk/README.md](sdk/README.md)。
 
-**唯讀（直連 + Worker 模式）：**
+## 安全設計
 
-| 方法 | 回傳型別 | 說明 |
-|------|----------|------|
-| `content(url, **opts)` | `str` | 渲染後的 HTML |
-| `markdown(url, **opts)` | `str` | 乾淨的 Markdown |
-| `screenshot(url, **opts)` | `bytes` | PNG 圖片 |
-| `pdf(url, **opts)` | `bytes` | PDF 文件 |
-| `snapshot(url, **opts)` | `dict` | HTML + 中繼資料 |
-| `scrape(url, selectors, **opts)` | `dict` | 正規化為 `{"elements": [...]}` |
-| `json_extract(url, prompt, **opts)` | `dict` | AI 擷取的資料 |
-| `links(url, **opts)` | `list[dict]` | 正規化為 `{href, text}` 物件陣列 |
-| `a11y(url, **opts)` | `dict` | 無障礙導向快照，已移除截圖資料 |
-| `crawl(url, **opts)` | `str` | Job ID |
-| `crawl_status(job_id)` | `dict` | 任務狀態 |
-| `crawl_wait(job_id, timeout, poll_interval)` | `dict` | 等待完成 |
+- Bearer keys 經 SHA-256 後用 constant-time loop 比對。
+- 限流與 crawl owner metadata 不使用 raw API key。
+- URL 驗證阻擋 private、loopback、link-local、CGNAT、multicast、reserved 等非公開位址；REST 前檢查 top-level 與注入資源 URL 的 DNS，互動模式再攔截每個 browser request。REST Quick Actions 在 Cloudflare 遠端瀏覽器執行，因此 redirect、page subresource 與 crawl-discovered URL 不在本 Worker 的攔截邊界，必須依賴 Cloudflare egress isolation。不要把 API key 交給不受信任的 tenant；需要應用層逐 request 攔截時請使用互動路由。
+- 多 key 部署會檢查 crawl creator ownership。
+- 共用選項、selectors、scripts 與 action chains 有型別/大小限制。
+- MCP screenshot/PDF 使用不可預測檔名、process-private `0700` 目錄與 `0600` 檔案，不含 URL userinfo，並有單檔/數量/總容量限制，process 結束時清除。
+- Setup 與 examples 不 hardcode 或顯示 secrets；請保持 `.dev.vars`、`wrangler.toml`、`.mcp.json` 私有。
 
-**互動（僅 Worker 模式）：**
+生產使用前請查看 Cloudflare Browser Run 最新的 [limits](https://developers.cloudflare.com/browser-run/limits/) 與 [pricing](https://developers.cloudflare.com/browser-run/pricing/)。
 
-| 方法 | 回傳型別 | 說明 |
-|------|----------|------|
-| `click(url, selector, **opts)` | `dict` | 點擊元素，回傳頁面狀態 |
-| `type_text(url, selector, text, clear?, **opts)` | `dict` | 在輸入框中輸入文字 |
-| `evaluate(url, script, **opts)` | `dict` | 執行 JS，回傳結果 |
-| `interact(url, actions, **opts)` | `dict` | 串接多個動作 |
-| `submit_form(url, fields, submit_selector?, **opts)` | `dict` | 填寫並提交表單 |
-| `delete_crawl(job_id)` | `None` | 刪除快取的爬取結果 |
+## Skills
 
-所有方法都接受 `no_cache=True` 來繞過快取、`cookies`/`headers` 來擷取需要登入的頁面、`wait_for` 等待 CSS 選擇器、`wait_until` 設定導航策略（SPA 用 `networkidle0`）、`user_agent` 設定自訂 User-Agent。互動方法在直連模式下會拋出 `NotImplementedError`。若 Worker 模式下互動方法回傳 404，通常代表部署版本過舊，需要重新部署。
-
-## Skills（附贈）
-
-CF Browser 附帶 6 個即用的 [Claude Code Skills](https://docs.anthropic.com/en/docs/claude-code/skills)，放在 `skills/` 目錄。將 skill 資料夾複製到你專案的 `.claude/skills/` 即可啟用。
-
-| Skill | 指令 | 功能 |
-|-------|------|------|
-| **content-extractor** | `/content-extractor` | 讀取頁面、擷取結構化資料、抓取元素、發現連結 |
-| **site-auditor** | `/site-auditor` | 爬取網站並產生 SEO / 連結 / 無障礙審計報告 |
-| **doc-fetcher** | `/doc-fetcher` | 將整個文件站抓取為本地 Markdown，供 RAG 使用 |
-| **visual-qa** | `/visual-qa` | 多裝置視窗截圖（手機/平板/筆電/桌機）+ 視覺檢查 |
-| **changelog-monitor** | `/changelog-monitor` | 追蹤任何專案的版本更新與破壞性變更 |
-| **competitor-watch** | `/competitor-watch` | 擷取並比較競爭對手的定價 / 功能 |
-
-### 安裝 Skill
+`skills/` 內含 content extraction、site audit、文件抓取、visual QA、changelog monitor、competitor comparison 六個 Skill：
 
 ```bash
-# 複製單一 skill
-cp -r skills/content-extractor .claude/skills/
-
-# 或全部複製
-cp -r skills/* .claude/skills/
+cp -R skills/content-extractor .claude/skills/
+# 或
+cp -R skills/* .claude/skills/
 ```
 
-重啟 Claude Code — skill 即可作為斜線指令使用。
-
-### 工作流程範例
-
-```
-「讀取 Hono 文件並摘要路由章節」
-→ /content-extractor → browser_markdown → 乾淨摘要
-
-「審計 claude-world.com 的 SEO 問題」
-→ /site-auditor → 爬取 50 頁 → 擷取 meta 標籤 → Markdown 報告
-
-「下載 Astro 文件做離線參考」
-→ /doc-fetcher → 發現 20 頁 → 逐頁 browser_markdown → 儲存到 docs/
-
-「在手機、平板和桌機上 QA 檢查我們的網站」
-→ /visual-qa → 每頁 4 種視窗截圖 → 視覺檢查報告
-
-「Claude Code 最近更新了什麼？」
-→ /changelog-monitor → 從 GitHub releases 擷取 → 結構化摘要
-
-「比較 Vercel、Netlify、Cloudflare Pages 的定價」
-→ /competitor-watch → 擷取各家定價頁 → 標準化比較表
-```
-
-## 安全性
-
-- **認證**：使用 SHA-256 進行 timing-safe Bearer token 比對
-- **速率限制**：以雜湊後的 key 材料在 KV 中進行每 key 追蹤
-- **SSRF 防護**：僅允許 `http://` 和 `https://` URL，阻擋 localhost、私有 IP literal，以及 DNS 解析到私有 IP 的主機名稱
-- **Cookie 隔離**：Cookie 僅逐次請求注入，不會持久化儲存
-- **密鑰**：所有憑證透過 `wrangler secret put` 儲存，絕不寫入程式碼
-
-## 費用
-
-| 元件 | 免費方案 | 付費方案（$5/月 Workers） |
-|------|----------|--------------------------|
-| Browser Rendering | 每日 10 分鐘，5 個爬取任務 | 更高限制 |
-| KV | 每日 100K 讀取 | 每月 10M 讀取 |
-| R2 | 10GB 儲存 | 包含 10GB |
-| Workers | 每日 100K 請求 | 每月 10M 請求 |
-
-## 開發
+## 開發與驗證
 
 ```bash
-# Worker
-cd worker && npm install && npm test
+# Worker（Node 22 或 24）
+cd worker
+npm ci
+npm audit --audit-level=high
+npm run type-check
+npm test
 
-# SDK（68 個測試）
-cd sdk && pip install -e ".[dev]" && pytest tests/ -v
+# SDK
+python -m pip install -e './sdk[dev]'
+python -m ruff check sdk/src sdk/tests examples
+python -m mypy --config-file sdk/pyproject.toml sdk/src
+python -m pytest -q sdk/tests
 
-# MCP Server
-cd mcp-server && pip install -e ../sdk && pip install -e ".[dev]" && pytest tests/ -v
+# MCP
+python -m pip install -e './sdk' -e './mcp-server[dev]'
+python -m ruff check mcp-server/src mcp-server/tests
+python -m mypy --config-file mcp-server/pyproject.toml mcp-server/src
+python -m pytest -q mcp-server/tests
 ```
+
+CI 驗證 Python 3.10–3.13、Node 22/24、audit、型別、完整測試、Python 發行包內容、Actionlint、ShellCheck、setup mock end-to-end 與 Wrangler deploy dry-run。
 
 ## 疑難排解
 
-- `browser_click` / `browser_type` / `browser_evaluate` / `browser_interact` / `browser_submit_form` 回傳 `501`：Worker 缺少 `[browser] binding = "BROWSER"`。
-- 這些互動工具回傳 `404`：目前連到的是舊版 Worker，請重新部署並確認 `/health` 版本。
-- `browser_scrape` 或 `browser_links` 在不同環境長得不一樣：新版 SDK / MCP 會自動正規化，但最乾淨的作法仍是重新部署 Worker。
-
-## 專案結構
-
-```
-cf-browser/
-├── worker/                  Cloudflare Worker（TypeScript/Hono）
-│   ├── src/
-│   │   ├── index.ts         應用程式進入點
-│   │   ├── types.ts         Env 綁定與請求型別
-│   │   ├── middleware/      認證、快取、速率限制
-│   │   ├── routes/          15 個端點處理器
-│   │   └── lib/             CF API 客戶端、參數映射、回應正規化、快取鍵、URL 驗證
-│   ├── tests/
-│   └── wrangler.toml.example
-├── sdk/                     Python SDK（httpx + Pydantic）
-│   ├── src/cf_browser/
-│   │   ├── client.py        CFBrowser 客戶端（Worker 模式）
-│   │   ├── direct.py        CFBrowserDirect 客戶端（直連模式）
-│   │   ├── _normalizers.py  回應格式正規化工具
-│   │   ├── _shared.py       共用工具（爬取輪詢）
-│   │   ├── models.py        Pydantic 回應模型
-│   │   └── exceptions.py    型別化例外階層
-│   └── tests/               test_client.py + test_direct.py
-├── mcp-server/              MCP Server（FastMCP）
-│   └── src/cf_browser_mcp/server.py
-├── skills/                  Claude Code Skills（複製到 .claude/skills/）
-│   ├── content-extractor/   網頁內容讀取與擷取
-│   ├── site-auditor/        SEO 與連結健康審計
-│   ├── doc-fetcher/         文件抓取供 RAG 使用
-│   ├── visual-qa/           多裝置視窗截圖 QA
-│   ├── changelog-monitor/   版本更新與破壞性變更追蹤
-│   └── competitor-watch/    競品定價與功能比較
-├── LICENSE                  MIT
-├── README.md
-└── README.zh-TW.md
-```
-
-## 貢獻
-
-1. Fork 此專案
-2. 建立功能分支
-3. 撰寫你的變更與測試
-4. 執行 `npm test`（worker）和 `pytest`（SDK + MCP Server）
-5. 提交 Pull Request
+- 互動回 501：啟用 `BROWSER` binding 並使用 Worker mode。
+- 互動回 404：重新部署；`/health` 應顯示 `2.1.0`。
+- MCP 同時存在兩組憑證：設定 `CF_BROWSER_MODE`。
+- Crawl records 不完整：持續使用回傳的 opaque `cursor`，直到不再有 cursor。
+- Setup 中途停止：查看實際失敗的 Wrangler/curl 步驟；腳本刻意不吞錯誤或宣稱假成功。
 
 ## 授權
 

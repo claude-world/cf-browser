@@ -1,7 +1,7 @@
 ---
 name: doc-fetcher
 description: Fetch external documentation sites and convert to local markdown for context
-user_invocable: true
+user-invocable: true
 ---
 
 # Doc Fetcher
@@ -10,7 +10,7 @@ Fetch and convert external documentation to local markdown files for use as cont
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
+CF Browser MCP server must be configured (see the [CF Browser quick start](https://github.com/claude-world/cf-browser#quick-start)).
 
 ## Workflow
 

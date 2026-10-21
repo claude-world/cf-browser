@@ -1,7 +1,7 @@
 ---
 name: competitor-watch
 description: Extract and compare structured data from competitor or benchmark websites
-user_invocable: true
+user-invocable: true
 ---
 
 # Competitor Watch
@@ -10,7 +10,7 @@ Extract and compare structured data from multiple websites side-by-side.
 
 ## Prerequisites
 
-CF Browser MCP server must be configured in `.mcp.json` (see [quick start](../../README.md#quick-start)).
+CF Browser MCP server must be configured (see the [CF Browser quick start](https://github.com/claude-world/cf-browser#quick-start)).
 
 ## Why This Skill?
 
