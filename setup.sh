@@ -1,299 +1,796 @@
 #!/usr/bin/env bash
 #
-# CF Browser — One-Command Setup
+# CF Browser — verified one-command setup
 #
-# Creates all Cloudflare resources, deploys the Worker, and outputs
-# a ready-to-paste .mcp.json config for Claude Code.
+# Creates Cloudflare storage, configures bindings and secrets, deploys the
+# Worker, verifies an authenticated render, and installs/registers the MCP
+# server without printing credentials.
 #
-# Usage:
-#   bash setup.sh
-#
-# Prerequisites:
-#   - Node.js 18+, Python 3.10+
-#   - wrangler CLI authenticated (npm i -g wrangler && wrangler login)
-#   - Cloudflare account with Browser Rendering enabled
-#
-set -euo pipefail
+# Prerequisites: Node.js 22+, Python 3.10+, npm, curl, openssl, and an
+# authenticated Wrangler session (`npx wrangler login`).
 
-# ---------------------------------------------------------------------------
-# Colors
-# ---------------------------------------------------------------------------
+set -euo pipefail
+umask 077
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info()  { echo -e "${BLUE}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+die()   { error "$*"; exit 1; }
 
-# ---------------------------------------------------------------------------
-# Pre-flight checks
-# ---------------------------------------------------------------------------
-info "Checking prerequisites..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKER_DIR="${SCRIPT_DIR}/worker"
+FINAL_WRANGLER_CONFIG="${WORKER_DIR}/wrangler.toml"
+WRANGLER_CONFIG="$FINAL_WRANGLER_CONFIG"
+ENABLE_INTERACTIONS="${CF_BROWSER_ENABLE_INTERACTIONS:-1}"
+INPUT_CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+INPUT_CF_API_TOKEN="${CF_API_TOKEN:-}"
+INPUT_CF_BROWSER_API_KEY="${CF_BROWSER_API_KEY:-}"
+unset CF_ACCOUNT_ID CF_API_TOKEN CF_BROWSER_API_KEY
 
-if ! command -v wrangler &>/dev/null; then
-  error "wrangler CLI not found. Install with: npm i -g wrangler"
-  exit 1
-fi
+PENDING_WRANGLER_CONFIG=""
+SECRETS_FILE=""
+SMOKE_BODY=""
+SMOKE_CURL_CONFIG=""
+MCP_REGISTRATION_BACKUP=""
+R2_MARKER_FILE=""
+R2_MARKER_PROBE=""
+MCP_STAGED_DIR=""
+MCP_STAGED_RETAIN=0
+SCRUBBED_INSTALL_ENV=(
+  env
+  -u CF_API_TOKEN
+  -u CF_BROWSER_API_KEY
+  -u CLOUDFLARE_API_TOKEN
+  -u CLOUDFLARE_API_KEY
+  -u CLOUDFLARE_EMAIL
+)
+cleanup() {
+  [ -z "$PENDING_WRANGLER_CONFIG" ] || rm -f -- "$PENDING_WRANGLER_CONFIG"
+  [ -z "$SECRETS_FILE" ] || rm -f -- "$SECRETS_FILE"
+  [ -z "$SMOKE_BODY" ] || rm -f -- "$SMOKE_BODY"
+  [ -z "$SMOKE_CURL_CONFIG" ] || rm -f -- "$SMOKE_CURL_CONFIG"
+  [ -z "$MCP_REGISTRATION_BACKUP" ] || rm -f -- "$MCP_REGISTRATION_BACKUP"
+  [ -z "$R2_MARKER_FILE" ] || rm -f -- "$R2_MARKER_FILE"
+  [ -z "$R2_MARKER_PROBE" ] || rm -f -- "$R2_MARKER_PROBE"
+  if [ -n "$MCP_STAGED_DIR" ] && [ "$MCP_STAGED_RETAIN" != "1" ]; then
+    case "$MCP_STAGED_DIR" in
+      "${CONFIG_DIR:-}"/generation.*)
+        rm -rf -- "$MCP_STAGED_DIR"
+        ;;
+    esac
+  fi
+}
+trap cleanup EXIT
 
-if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
-  error "Python 3.10+ not found."
-  exit 1
-fi
+for command_name in node npm curl openssl; do
+  command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required."
+done
 
-PYTHON_CMD=$(command -v python3 || command -v python)
-PYTHON_MCP_CMD=$(basename "$PYTHON_CMD")
-
-# Verify Python version >= 3.10
-if ! "$PYTHON_CMD" -c "import sys; assert sys.version_info >= (3,10)" 2>/dev/null; then
-  error "Python 3.10+ required. Found: $($PYTHON_CMD --version 2>&1)"
-  exit 1
-fi
-
-if ! command -v node &>/dev/null; then
-  error "Node.js not found."
-  exit 1
-fi
-
-# Check wrangler is authenticated
-if ! wrangler whoami &>/dev/null 2>&1; then
-  error "wrangler is not authenticated. Run: wrangler login"
-  exit 1
-fi
-
-ok "All prerequisites met."
-
-# ---------------------------------------------------------------------------
-# Get Cloudflare Account ID
-# ---------------------------------------------------------------------------
-info "Detecting Cloudflare Account ID..."
-
-CF_ACCOUNT_ID=$(wrangler whoami 2>/dev/null | grep -oE '[a-f0-9]{32}' | head -1 || true)
-if [ -z "$CF_ACCOUNT_ID" ]; then
-  # Fallback: ask user
-  echo ""
-  echo "Could not auto-detect Account ID."
-  echo "Find it at: https://dash.cloudflare.com → select account → Overview → Account ID"
-  read -rp "Enter your Cloudflare Account ID: " CF_ACCOUNT_ID
-fi
-
-if [ -z "$CF_ACCOUNT_ID" ]; then
-  error "Account ID is required."
-  exit 1
-fi
-
-ok "Account ID: ${CF_ACCOUNT_ID:0:8}..."
-
-# ---------------------------------------------------------------------------
-# Get CF API Token
-# ---------------------------------------------------------------------------
-info "Setting up CF API Token..."
-echo ""
-echo "Create an API token at: https://dash.cloudflare.com/profile/api-tokens"
-echo "Required permission: 'Workers Browser Rendering Edit'"
-echo ""
-read -rsp "Enter your CF API Token (hidden): " CF_API_TOKEN
-echo ""
-
-if [ -z "$CF_API_TOKEN" ]; then
-  error "API Token is required."
-  exit 1
-fi
-
-ok "API Token received."
-
-# ---------------------------------------------------------------------------
-# Generate client API key
-# ---------------------------------------------------------------------------
-info "Generating client API key..."
-API_KEY=$(openssl rand -hex 32)
-ok "API key generated: ${API_KEY:0:16}..."
-
-# ---------------------------------------------------------------------------
-# Create KV namespaces
-# ---------------------------------------------------------------------------
-WORKER_DIR="$(cd "$(dirname "$0")/worker" && pwd)"
-cd "$WORKER_DIR"
-
-info "Installing Worker dependencies..."
-npm install --silent 2>/dev/null
-ok "Dependencies installed."
-
-info "Creating KV namespace: CACHE..."
-CACHE_OUTPUT=$(wrangler kv namespace create CACHE 2>&1)
-CACHE_ID=$(echo "$CACHE_OUTPUT" | sed -n 's/.*id = "\([^"]*\)".*/\1/p' | head -1)
-if [ -z "$CACHE_ID" ]; then
-  # Namespace might already exist
-  warn "Could not create CACHE namespace (may already exist)."
-  echo "  Output: $CACHE_OUTPUT"
-  read -rp "Enter existing CACHE namespace ID (or press Enter to skip): " CACHE_ID
-fi
-ok "CACHE namespace: ${CACHE_ID:-skipped}"
-
-info "Creating KV namespace: RATE_LIMIT..."
-RATE_LIMIT_OUTPUT=$(wrangler kv namespace create RATE_LIMIT 2>&1)
-RATE_LIMIT_ID=$(echo "$RATE_LIMIT_OUTPUT" | sed -n 's/.*id = "\([^"]*\)".*/\1/p' | head -1)
-if [ -z "$RATE_LIMIT_ID" ]; then
-  warn "Could not create RATE_LIMIT namespace (may already exist)."
-  echo "  Output: $RATE_LIMIT_OUTPUT"
-  read -rp "Enter existing RATE_LIMIT namespace ID (or press Enter to skip): " RATE_LIMIT_ID
-fi
-ok "RATE_LIMIT namespace: ${RATE_LIMIT_ID:-skipped}"
-
-# ---------------------------------------------------------------------------
-# Create R2 bucket
-# ---------------------------------------------------------------------------
-info "Creating R2 bucket: cf-browser-storage..."
-R2_OUTPUT=$(wrangler r2 bucket create cf-browser-storage 2>&1 || true)
-if echo "$R2_OUTPUT" | grep -qi "already exists\|already owned"; then
-  ok "R2 bucket already exists."
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_CMD="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_CMD="$(command -v python)"
 else
-  ok "R2 bucket created."
+  die "Python 3.10+ is required."
 fi
 
-# ---------------------------------------------------------------------------
-# Write wrangler.toml
-# ---------------------------------------------------------------------------
-info "Writing wrangler.toml..."
+NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
+[ "$NODE_MAJOR" -ge 22 ] || die "Node.js 22+ is required; found $(node --version)."
+"$PYTHON_CMD" -c 'import sys; assert sys.version_info >= (3, 10)' 2>/dev/null \
+  || die "Python 3.10+ is required; found $($PYTHON_CMD --version 2>&1)."
+[ "$ENABLE_INTERACTIONS" = "0" ] || [ "$ENABLE_INTERACTIONS" = "1" ] \
+  || die "CF_BROWSER_ENABLE_INTERACTIONS must be 0 or 1."
 
-cat > wrangler.toml << TOML
+EXISTING_RATE_LIMIT_NAMESPACE_ID=""
+if [ -f "$WRANGLER_CONFIG" ]; then
+  EXISTING_RATE_LIMIT_NAMESPACE_ID="$(
+    "$PYTHON_CMD" - "$WRANGLER_CONFIG" <<'PY' || true
+import re
+import sys
+
+def finish_binding(binding):
+    if binding.get("name") != "RATE_LIMITER":
+        return None
+    value = binding.get("namespace_id", "")
+    return value if value.isdigit() and int(value) > 0 else None
+
+try:
+    binding = {}
+    in_ratelimit = False
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        for raw_line in stream:
+            line = raw_line.split("#", 1)[0].strip()
+            table = re.fullmatch(r"\[\[\s*([^]]+)\s*\]\]", line)
+            if table:
+                value = finish_binding(binding) if in_ratelimit else None
+                if value:
+                    print(value)
+                    raise SystemExit
+                in_ratelimit = table.group(1).strip() == "ratelimits"
+                binding = {}
+                continue
+            if not in_ratelimit:
+                continue
+            assignment = re.fullmatch(
+                r"(name|namespace_id)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|(\d+))",
+                line,
+            )
+            if assignment:
+                binding[assignment.group(1)] = next(
+                    value for value in assignment.groups()[1:] if value is not None
+                )
+    value = finish_binding(binding) if in_ratelimit else None
+    if value:
+        print(value)
+except Exception:
+    pass
+PY
+  )"
+  CONFIG_BACKUP="${WRANGLER_CONFIG}.$(date -u +%Y%m%dT%H%M%SZ).bak"
+  cp -p "$WRANGLER_CONFIG" "$CONFIG_BACKUP"
+  chmod 600 "$CONFIG_BACKUP"
+  info "Existing Worker config backed up to ${CONFIG_BACKUP}."
+fi
+
+info "Installing locked Worker dependencies..."
+cd "$WORKER_DIR"
+"${SCRUBBED_INSTALL_ENV[@]}" npm ci --silent
+WRANGLER=(npx --no-install wrangler)
+"${WRANGLER[@]}" whoami >/dev/null 2>&1 \
+  || die "Wrangler is not authenticated. Run: cd worker && npx wrangler login"
+ok "Prerequisites and Wrangler authentication verified."
+
+CF_ACCOUNT_ID="$INPUT_CF_ACCOUNT_ID"
+if [ -z "$CF_ACCOUNT_ID" ]; then
+  DISCOVERED_ACCOUNT_IDS="$(
+    "${WRANGLER[@]}" whoami 2>/dev/null \
+      | grep -oE '[a-f0-9]{32}' \
+      | sort -u \
+      || true
+  )"
+  DISCOVERED_ACCOUNT_COUNT="$(
+    printf '%s\n' "$DISCOVERED_ACCOUNT_IDS" | sed '/^$/d' | wc -l | tr -d ' '
+  )"
+  if [ "$DISCOVERED_ACCOUNT_COUNT" = "1" ]; then
+    CF_ACCOUNT_ID="$DISCOVERED_ACCOUNT_IDS"
+  elif [ "$DISCOVERED_ACCOUNT_COUNT" -gt 1 ]; then
+    echo "Wrangler is authenticated to multiple accounts:"
+    printf '%s\n' "$DISCOVERED_ACCOUNT_IDS" | sed 's/^/  /'
+  fi
+fi
+if [ -z "$CF_ACCOUNT_ID" ]; then
+  echo "Find the Account ID in the Cloudflare dashboard account overview."
+  read -rp "Cloudflare Account ID: " CF_ACCOUNT_ID
+fi
+[[ "$CF_ACCOUNT_ID" =~ ^[a-fA-F0-9]{32}$ ]] || die "A valid 32-character Account ID is required."
+
+CF_API_TOKEN="$INPUT_CF_API_TOKEN"
+if [ -z "$CF_API_TOKEN" ]; then
+  echo "Create a token with Account > Browser Run (Browser Rendering) > Edit permission:"
+  echo "https://dash.cloudflare.com/profile/api-tokens"
+  read -rsp "Cloudflare API Token (hidden): " CF_API_TOKEN
+  echo
+fi
+[ -n "$CF_API_TOKEN" ] || die "Cloudflare API Token is required."
+
+API_KEY="$INPUT_CF_BROWSER_API_KEY"
+if [ -z "$API_KEY" ]; then
+  API_KEY="$(openssl rand -hex 32)"
+fi
+[ "${#API_KEY}" -ge 32 ] || die "CF_BROWSER_API_KEY must be at least 32 characters."
+[[ "$API_KEY" != *$'\n'* && "$API_KEY" != *$'\r'* ]] \
+  || die "CF_BROWSER_API_KEY must not contain line breaks."
+ok "Credentials loaded without displaying secret values."
+
+# Use a real .toml filename: current Wrangler intentionally ignores unknown
+# config extensions such as wrangler.toml.example.
+PENDING_WRANGLER_CONFIG="$(
+  "$PYTHON_CMD" - "$WORKER_DIR" <<'PY'
+import pathlib, sys, tempfile
+
+with tempfile.NamedTemporaryFile(
+    prefix=".wrangler.setup.", suffix=".toml", dir=sys.argv[1], delete=False
+) as output:
+    path = pathlib.Path(output.name)
+path.chmod(0o600)
+print(path)
+PY
+)"
+WRANGLER_CONFIG="$PENDING_WRANGLER_CONFIG"
+cat > "$WRANGLER_CONFIG" <<TOML
 name = "cf-browser"
 main = "src/index.ts"
-compatibility_date = "2026-03-01"
+account_id = "${CF_ACCOUNT_ID}"
+compatibility_date = "2026-07-18"
+compatibility_flags = ["nodejs_compat"]
+TOML
+
+find_cache_id() {
+  "${WRANGLER[@]}" kv namespace list --config "$WRANGLER_CONFIG" 2>/dev/null | "$PYTHON_CMD" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+for item in data:
+    if item.get("title") == "cf-browser-CACHE":
+        print(item.get("id", ""))
+        break
+'
+}
+
+info "Ensuring the CACHE KV namespace exists..."
+CACHE_ID="$(find_cache_id || true)"
+if [ -z "$CACHE_ID" ]; then
+  if CACHE_OUTPUT="$(
+    "${WRANGLER[@]}" kv namespace create CACHE \
+      --config "$WRANGLER_CONFIG" 2>&1
+  )"; then
+    CACHE_ID="$(
+      printf '%s' "$CACHE_OUTPUT" \
+        | sed -n 's/.*id = "\([^"]*\)".*/\1/p' \
+        | head -1
+    )"
+  else
+    CACHE_ID="$(find_cache_id || true)"
+  fi
+fi
+if [[ ! "$CACHE_ID" =~ ^[a-fA-F0-9]{32}$ ]]; then
+  read -rp "Existing CACHE namespace ID: " CACHE_ID
+fi
+[[ "$CACHE_ID" =~ ^[a-fA-F0-9]{32}$ ]] || die "A valid CACHE namespace ID is required."
+ok "CACHE namespace is ready."
+
+NORMALIZED_ACCOUNT_ID="$(printf '%s' "$CF_ACCOUNT_ID" | tr '[:upper:]' '[:lower:]')"
+R2_BUCKET_NAME="${CF_BROWSER_R2_BUCKET_NAME:-cf-browser-storage-${NORMALIZED_ACCOUNT_ID}}"
+R2_BUCKET_MARKER_KEY=".cf-browser-managed-v1"
+R2_OBJECT_PREFIX="cf-browser/"
+R2_LIFECYCLE_RULE="cf-browser-prefix-expire-after-8-days"
+
+if [ "${#R2_BUCKET_NAME}" -lt 3 ] || [ "${#R2_BUCKET_NAME}" -gt 63 ] \
+    || [[ ! "$R2_BUCKET_NAME" =~ ^[a-z0-9][a-z0-9-]*[a-z0-9]$ ]]; then
+  die "CF_BROWSER_R2_BUCKET_NAME must be a 3-63 character lowercase R2 bucket name using only letters, digits, and hyphens."
+fi
+
+bucket_exists() {
+  local bucket_output
+  bucket_output="$(
+    "${WRANGLER[@]}" r2 bucket list --config "$WRANGLER_CONFIG" 2>/dev/null
+  )" || return 1
+  # Wrangler currently renders R2 lists as a table, while older releases and
+  # test doubles may emit JSON. Parse both forms and require an exact name.
+  printf '%s\n' "$bucket_output" | "$PYTHON_CMD" -c '
+import json, re, sys
+
+target = sys.argv[1]
+raw = sys.stdin.read()
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = None
+if isinstance(payload, list):
+    names = {
+        str(item.get("name") or item.get("bucket_name") or "")
+        for item in payload
+        if isinstance(item, dict)
+    }
+else:
+    names = {
+        token
+        for line in raw.splitlines()
+        for token in re.split(r"[\s|│]+", line.strip())
+        if token
+    }
+raise SystemExit(0 if target in names else 1)
+' "$R2_BUCKET_NAME"
+}
+
+verify_bucket_marker() {
+  rm -f -- "$R2_MARKER_PROBE"
+  if ! "${WRANGLER[@]}" r2 object get \
+      "${R2_BUCKET_NAME}/${R2_BUCKET_MARKER_KEY}" \
+      --file "$R2_MARKER_PROBE" \
+      --config "$WRANGLER_CONFIG" >/dev/null 2>&1; then
+    return 1
+  fi
+  CFB_R2_ACCOUNT_ID="$NORMALIZED_ACCOUNT_ID" \
+  CFB_R2_BUCKET_NAME="$R2_BUCKET_NAME" \
+  "$PYTHON_CMD" - "$R2_MARKER_PROBE" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+expected = {
+    "schema": 1,
+    "owner": "cf-browser",
+    "account_id": os.environ["CFB_R2_ACCOUNT_ID"],
+    "bucket_name": os.environ["CFB_R2_BUCKET_NAME"],
+}
+try:
+    actual = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if actual == expected else 1)
+PY
+}
+
+write_bucket_marker() {
+  CFB_R2_ACCOUNT_ID="$NORMALIZED_ACCOUNT_ID" \
+  CFB_R2_BUCKET_NAME="$R2_BUCKET_NAME" \
+  "$PYTHON_CMD" - "$R2_MARKER_FILE" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({
+    "schema": 1,
+    "owner": "cf-browser",
+    "account_id": os.environ["CFB_R2_ACCOUNT_ID"],
+    "bucket_name": os.environ["CFB_R2_BUCKET_NAME"],
+}, separators=(",", ":")) + "\n", encoding="utf-8")
+path.chmod(0o600)
+PY
+  "${WRANGLER[@]}" r2 object put \
+    "${R2_BUCKET_NAME}/${R2_BUCKET_MARKER_KEY}" \
+    --file "$R2_MARKER_FILE" \
+    --content-type application/json \
+    --config "$WRANGLER_CONFIG" >/dev/null 2>&1
+}
+
+R2_MARKER_FILE="$(mktemp)"
+R2_MARKER_PROBE="$(mktemp)"
+info "Ensuring the account-scoped R2 bucket exists..."
+if bucket_exists; then
+  verify_bucket_marker \
+    || die "R2 bucket ${R2_BUCKET_NAME} already exists but is not verified as CF Browser-managed for this account. Set CF_BROWSER_R2_BUCKET_NAME to a new dedicated bucket name and rerun setup."
+else
+  if "${WRANGLER[@]}" r2 bucket create "$R2_BUCKET_NAME" \
+      --config "$WRANGLER_CONFIG" >/dev/null 2>&1; then
+    write_bucket_marker \
+      || die "Created R2 bucket ${R2_BUCKET_NAME}, but could not write its CF Browser ownership marker. Refusing to install a lifecycle rule."
+    verify_bucket_marker \
+      || die "Created R2 bucket ${R2_BUCKET_NAME}, but its CF Browser ownership marker could not be verified. Refusing to install a lifecycle rule."
+  elif bucket_exists && verify_bucket_marker; then
+    : # A concurrent safe setup created and marked the same dedicated bucket.
+  else
+    die "Unable to create a dedicated, verified R2 bucket named ${R2_BUCKET_NAME}."
+  fi
+fi
+ok "Dedicated R2 bucket ownership is verified."
+
+lifecycle_rule_is_valid() {
+  local lifecycle_output
+  lifecycle_output="$(
+    "${WRANGLER[@]}" r2 bucket lifecycle list "$R2_BUCKET_NAME" \
+      --config "$WRANGLER_CONFIG" 2>/dev/null
+  )" || return 1
+  printf '%s\n' "$lifecycle_output" | "$PYTHON_CMD" -c '
+import json, re, sys
+
+target = sys.argv[1]
+expected_prefix = sys.argv[2]
+raw = sys.stdin.read()
+try:
+    payload = json.loads(raw)
+except Exception:
+    payload = None
+
+def find_rule(value):
+    if isinstance(value, dict):
+        if value.get("id") == target or value.get("name") == target:
+            return value
+        for item in value.values():
+            found = find_rule(item)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = find_rule(item)
+            if found is not None:
+                return found
+    return None
+
+rule = find_rule(payload)
+if rule is not None:
+    transition = rule.get("deleteObjectsTransition")
+    condition = transition.get("condition") if isinstance(transition, dict) else None
+    conditions = rule.get("conditions")
+    prefix = conditions.get("prefix") if isinstance(conditions, dict) else None
+    valid = (
+        rule.get("enabled") is True
+        and prefix == expected_prefix
+        and isinstance(condition, dict)
+        and condition.get("type") == "Age"
+        and condition.get("maxAge") == 8 * 24 * 60 * 60
+    )
+    raise SystemExit(0 if valid else 2)
+
+for block in re.split(r"\n\s*\n", raw):
+    fields = {}
+    for line in block.splitlines():
+        match = re.match(r"\s*([A-Za-z]+)\s*:\s*(.*?)\s*$", line)
+        if match:
+            fields[match.group(1).lower()] = match.group(2)
+    if fields.get("name") != target:
+        continue
+    valid = (
+        fields.get("enabled", "").lower() == "yes"
+        and fields.get("prefix") == expected_prefix
+        and "Expire objects after 8 days" in fields.get("action", "")
+    )
+    raise SystemExit(0 if valid else 2)
+
+raise SystemExit(1)
+' "$R2_LIFECYCLE_RULE" "$R2_OBJECT_PREFIX"
+}
+
+info "Ensuring R2 objects physically expire after eight days..."
+if lifecycle_rule_is_valid; then
+  :
+else
+  LIFECYCLE_STATUS=$?
+  if [ "$LIFECYCLE_STATUS" = "2" ]; then
+    die "R2 lifecycle rule ${R2_LIFECYCLE_RULE} exists but is not an enabled ${R2_OBJECT_PREFIX} prefix 8-day expiration rule. Correct or remove that rule, then rerun setup."
+  fi
+  if ! "${WRANGLER[@]}" r2 bucket lifecycle add \
+      "$R2_BUCKET_NAME" "$R2_LIFECYCLE_RULE" "$R2_OBJECT_PREFIX" \
+      --expire-days 8 \
+      --config "$WRANGLER_CONFIG" >/dev/null 2>&1; then
+    die "Unable to install the R2 object-expiration lifecycle rule."
+  fi
+  lifecycle_rule_is_valid || die "The R2 object-expiration lifecycle rule could not be verified after creation."
+fi
+ok "R2 object-expiration lifecycle rule is ready."
+
+RATE_LIMIT_NAMESPACE_ID="${CF_BROWSER_RATE_LIMIT_NAMESPACE_ID:-${EXISTING_RATE_LIMIT_NAMESPACE_ID}}"
+if [ -z "$RATE_LIMIT_NAMESPACE_ID" ]; then
+  RATE_LIMIT_NAMESPACE_ID="$(
+    "$PYTHON_CMD" -c 'import secrets; print(secrets.randbelow(2_000_000_000) + 1)'
+  )"
+fi
+[[ "$RATE_LIMIT_NAMESPACE_ID" =~ ^[1-9][0-9]*$ ]] \
+  || die "CF_BROWSER_RATE_LIMIT_NAMESPACE_ID must be a positive integer."
+
+info "Writing the deployment configuration..."
+cat > "$WRANGLER_CONFIG" <<TOML
+name = "cf-browser"
+main = "src/index.ts"
+account_id = "${CF_ACCOUNT_ID}"
+compatibility_date = "2026-07-18"
 compatibility_flags = ["nodejs_compat"]
 
 [[kv_namespaces]]
 binding = "CACHE"
 id = "${CACHE_ID}"
 
-[[kv_namespaces]]
-binding = "RATE_LIMIT"
-id = "${RATE_LIMIT_ID}"
-
 [[r2_buckets]]
 binding = "STORAGE"
-bucket_name = "cf-browser-storage"
+bucket_name = "${R2_BUCKET_NAME}"
 
-# Browser Rendering binding (Workers Paid plan; required for interaction tools)
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "${RATE_LIMIT_NAMESPACE_ID}"
+
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+TOML
+
+if [ "$ENABLE_INTERACTIONS" = "1" ]; then
+  cat >> "$WRANGLER_CONFIG" <<'TOML'
+
 [browser]
 binding = "BROWSER"
+TOML
+fi
+
+cat >> "$WRANGLER_CONFIG" <<'TOML'
 
 [dev]
 port = 8787
 TOML
+ok "Worker bindings configured."
 
-ok "wrangler.toml written."
+SECRETS_FILE="$(mktemp)"
+SMOKE_BODY="$(mktemp)"
+SMOKE_CURL_CONFIG="$(mktemp)"
+CFB_SETUP_ACCOUNT_ID="$CF_ACCOUNT_ID" \
+CFB_SETUP_API_TOKEN="$CF_API_TOKEN" \
+CFB_SETUP_API_KEY="$API_KEY" \
+"$PYTHON_CMD" - "$SECRETS_FILE" <<'PY'
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({
+    "CF_ACCOUNT_ID": os.environ["CFB_SETUP_ACCOUNT_ID"],
+    "CF_API_TOKEN": os.environ["CFB_SETUP_API_TOKEN"],
+    "API_KEYS": os.environ["CFB_SETUP_API_KEY"],
+}), encoding="utf-8")
+path.chmod(0o600)
+PY
 
-# ---------------------------------------------------------------------------
-# Set secrets
-# ---------------------------------------------------------------------------
-info "Setting Worker secrets..."
-
-echo "$CF_ACCOUNT_ID" | wrangler secret put CF_ACCOUNT_ID --force 2>/dev/null || \
-  warn "Failed to set CF_ACCOUNT_ID secret"
-
-echo "$CF_API_TOKEN" | wrangler secret put CF_API_TOKEN --force 2>/dev/null || \
-  warn "Failed to set CF_API_TOKEN secret"
-
-echo "$API_KEY" | wrangler secret put API_KEYS --force 2>/dev/null || \
-  warn "Failed to set API_KEYS secret"
-
-ok "Secrets configured."
-
-# ---------------------------------------------------------------------------
-# Deploy Worker
-# ---------------------------------------------------------------------------
-info "Deploying Worker..."
-DEPLOY_OUTPUT=$(wrangler deploy 2>&1)
-WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+\.workers\.dev' | head -1 || true)
-
-if [ -z "$WORKER_URL" ]; then
-  warn "Could not detect Worker URL from deploy output."
-  echo "  Output: $DEPLOY_OUTPUT"
-  read -rp "Enter your Worker URL (e.g. https://cf-browser.xxx.workers.dev): " WORKER_URL
+info "Deploying the Worker with encrypted secrets..."
+if ! DEPLOY_OUTPUT="$(
+  "${WRANGLER[@]}" deploy \
+    --config "$WRANGLER_CONFIG" \
+    --secrets-file "$SECRETS_FILE" 2>&1
+)"; then
+  error "$DEPLOY_OUTPUT"
+  die "Worker deployment failed."
 fi
+mv -f -- "$WRANGLER_CONFIG" "$FINAL_WRANGLER_CONFIG"
+WRANGLER_CONFIG="$FINAL_WRANGLER_CONFIG"
+PENDING_WRANGLER_CONFIG=""
+WORKER_URL="${CF_BROWSER_URL:-}"
+if [ -z "$WORKER_URL" ]; then
+  WORKER_URL="$(
+    printf '%s' "$DEPLOY_OUTPUT" \
+      | grep -oE 'https://[^[:space:]]+\.workers\.dev' \
+      | head -1 \
+      || true
+  )"
+fi
+if [ -z "$WORKER_URL" ]; then
+  read -rp "Deployed Worker URL: " WORKER_URL
+fi
+[[ "$WORKER_URL" =~ ^https:// ]] || die "A valid HTTPS Worker URL is required."
+ok "Worker deployment completed."
 
-ok "Worker deployed: $WORKER_URL"
-
-# ---------------------------------------------------------------------------
-# Verify deployment
-# ---------------------------------------------------------------------------
-info "Verifying deployment..."
-HEALTH_OK=false
-for i in 1 2 3; do
-  sleep 2
-  HEALTH=$(curl -s "${WORKER_URL}/health" 2>/dev/null || true)
-  if echo "$HEALTH" | grep -q '"ok"'; then
-    HEALTH_OK=true
+info "Waiting for readiness and running an authenticated render..."
+READY=false
+for _attempt in 1 2 3 4 5 6; do
+  HEALTH_CODE="$(
+    curl --disable -sS -o "$SMOKE_BODY" -w '%{http_code}' "${WORKER_URL}/health" \
+      || true
+  )"
+  if [ "$HEALTH_CODE" = "200" ] && "$PYTHON_CMD" - "$SMOKE_BODY" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    data = json.load(stream)
+raise SystemExit(0 if data.get("ready") is True else 1)
+PY
+  then
+    READY=true
     break
   fi
+  sleep 2
 done
+$READY || die "The deployed Worker did not become ready."
 
-if $HEALTH_OK; then
-  ok "Health check passed!"
+CFB_SETUP_API_KEY="$API_KEY" \
+"$PYTHON_CMD" - "$SMOKE_CURL_CONFIG" <<'PY'
+import os, pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+key = os.environ["CFB_SETUP_API_KEY"].replace("\\", "\\\\").replace('"', '\\"')
+path.write_text(
+    f'header = "Authorization: Bearer {key}"\n'
+    'header = "Content-Type: application/json"\n',
+    encoding="utf-8",
+)
+path.chmod(0o600)
+PY
+
+SMOKE_CODE="$(
+  curl --disable --config "$SMOKE_CURL_CONFIG" -sS -o "$SMOKE_BODY" -w '%{http_code}' \
+    -X POST "${WORKER_URL}/markdown" \
+    --data '{"url":"https://example.com","no_cache":true}' \
+    || true
+)"
+[ "$SMOKE_CODE" = "200" ] || die "Authenticated Markdown smoke test returned HTTP ${SMOKE_CODE}."
+[ -s "$SMOKE_BODY" ] || die "Authenticated Markdown smoke test returned an empty body."
+ok "Readiness and authenticated Markdown smoke tests passed."
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+CONFIG_DIR="${CONFIG_HOME}/cf-browser"
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+MCP_STAGED_DIR="$(mktemp -d "${CONFIG_DIR}/generation.XXXXXX")"
+chmod 700 "$MCP_STAGED_DIR"
+VENV_DIR="${MCP_STAGED_DIR}/venv"
+MCP_CONFIG="${MCP_STAGED_DIR}/mcp.json"
+MCP_LAUNCHER="${MCP_STAGED_DIR}/run-mcp"
+
+info "Staging the SDK and MCP server in an isolated generation..."
+"$PYTHON_CMD" -m venv "$VENV_DIR"
+VENV_PYTHON="${VENV_DIR}/bin/python"
+"${SCRUBBED_INSTALL_ENV[@]}" "$VENV_PYTHON" -m pip install --quiet --upgrade pip
+"${SCRUBBED_INSTALL_ENV[@]}" "$VENV_PYTHON" -m pip install --quiet \
+  --upgrade \
+  "${SCRIPT_DIR}/sdk" \
+  "${SCRIPT_DIR}/mcp-server"
+"${SCRUBBED_INSTALL_ENV[@]}" "$VENV_PYTHON" -c 'import cf_browser, cf_browser_mcp.server'
+ok "SDK and MCP imports verified."
+
+CFB_SETUP_URL="$WORKER_URL" \
+CFB_SETUP_KEY="$API_KEY" \
+CFB_SETUP_PYTHON="$VENV_PYTHON" \
+"$PYTHON_CMD" - "$MCP_CONFIG" <<'PY'
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+config = {
+    "mcpServers": {
+        "cf-browser": {
+            "type": "stdio",
+            "command": os.environ["CFB_SETUP_PYTHON"],
+            "args": ["-m", "cf_browser_mcp.server"],
+            "env": {
+                "CF_BROWSER_MODE": "worker",
+                "CF_BROWSER_URL": os.environ["CFB_SETUP_URL"],
+                "CF_BROWSER_API_KEY": os.environ["CFB_SETUP_KEY"],
+            },
+        }
+    }
+}
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+temporary.chmod(0o600)
+temporary.replace(path)
+PY
+chmod 600 "$MCP_CONFIG"
+
+CFB_SETUP_CONFIG="$MCP_CONFIG" \
+"$PYTHON_CMD" - "$MCP_LAUNCHER" <<'PY'
+import os, pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+config_path = os.environ["CFB_SETUP_CONFIG"]
+source = f'''#!/usr/bin/env python3
+import json
+import os
+
+with open({config_path!r}, encoding="utf-8") as stream:
+    server = json.load(stream)["mcpServers"]["cf-browser"]
+environment = os.environ.copy()
+environment.update(server["env"])
+os.execve(server["command"], [server["command"], *server["args"]], environment)
+'''
+path.write_text(source, encoding="utf-8")
+path.chmod(0o700)
+PY
+
+MCP_REGISTRATION_STATUS="required"
+restore_claude_registration() {
+  CFB_CLAUDE_STATE_FILE="$CLAUDE_STATE_FILE" \
+  "$PYTHON_CMD" - "$MCP_REGISTRATION_BACKUP" <<'PY'
+import json
+import os
+import pathlib
+import tempfile
+import sys
+
+state_path = pathlib.Path(os.environ["CFB_CLAUDE_STATE_FILE"])
+backup_path = pathlib.Path(sys.argv[1])
+entry = json.loads(backup_path.read_text(encoding="utf-8"))
+
+if state_path.exists():
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict):
+        raise TypeError("Claude state root is not an object")
+else:
+    state = {}
+
+servers = state.get("mcpServers")
+if servers is None:
+    servers = {}
+    state["mcpServers"] = servers
+elif not isinstance(servers, dict):
+    raise TypeError("Claude MCP registry is not an object")
+servers["cf-browser"] = entry
+
+state_path.parent.mkdir(parents=True, exist_ok=True)
+temporary_name = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix=".claude.json.cf-browser-restore.",
+        dir=state_path.parent,
+        delete=False,
+    ) as output:
+        temporary_name = output.name
+        json.dump(state, output, indent=2)
+        output.write("\n")
+    os.chmod(temporary_name, 0o600)
+    os.replace(temporary_name, state_path)
+    temporary_name = None
+finally:
+    if temporary_name is not None:
+        pathlib.Path(temporary_name).unlink(missing_ok=True)
+PY
+}
+
+if command -v claude >/dev/null 2>&1; then
+  CLAUDE_STATE_FILE="${CLAUDE_CONFIG_DIR:-${HOME}}/.claude.json"
+  MCP_REGISTRATION_BACKUP="$(mktemp)"
+  if CFB_CLAUDE_STATE_FILE="$CLAUDE_STATE_FILE" \
+      "$PYTHON_CMD" - "$MCP_REGISTRATION_BACKUP" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(os.environ["CFB_CLAUDE_STATE_FILE"])
+backup_path = pathlib.Path(sys.argv[1])
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    servers = state.get("mcpServers")
+    if not isinstance(servers, dict) or "cf-browser" not in servers:
+        raise KeyError("cf-browser")
+    backup_path.write_text(
+        json.dumps(servers["cf-browser"]) + "\n",
+        encoding="utf-8",
+    )
+    backup_path.chmod(0o600)
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    if claude mcp remove --scope user cf-browser >/dev/null 2>&1; then
+      if claude mcp add \
+          --transport stdio \
+          --scope user \
+          cf-browser -- "$MCP_LAUNCHER" >/dev/null 2>&1; then
+        MCP_REGISTRATION_STATUS="current"
+        MCP_STAGED_RETAIN=1
+      elif restore_claude_registration; then
+        MCP_REGISTRATION_STATUS="restored"
+        warn "Claude Code registration failed; the previous user-scoped registration was restored."
+      else
+        die "Claude Code registration failed and the previous registration could not be restored."
+      fi
+    elif restore_claude_registration; then
+      MCP_REGISTRATION_STATUS="restored"
+      warn "Claude Code registration could not be replaced; the previous user-scoped registration was preserved."
+    else
+      die "Claude Code registration could not be replaced or restored."
+    fi
+  else
+    rm -f -- "$MCP_REGISTRATION_BACKUP"
+    MCP_REGISTRATION_BACKUP=""
+    if claude mcp add \
+        --transport stdio \
+        --scope user \
+        cf-browser -- "$MCP_LAUNCHER" >/dev/null 2>&1; then
+      MCP_REGISTRATION_STATUS="current"
+      MCP_STAGED_RETAIN=1
+    else
+      MCP_STAGED_RETAIN=1
+      warn "Claude Code registration failed; use the private config file shown below."
+    fi
+  fi
+  if [ "$MCP_REGISTRATION_STATUS" = "current" ]; then
+    ok "Claude Code user-scoped MCP server registered."
+  fi
 else
-  warn "Health check did not return expected response: $HEALTH"
-  warn "The Worker may need a moment to propagate. Try: curl ${WORKER_URL}/health"
+  MCP_STAGED_RETAIN=1
+  warn "Claude Code CLI was not found; MCP configuration was saved but not registered."
 fi
 
-# ---------------------------------------------------------------------------
-# Install Python SDK + MCP Server
-# ---------------------------------------------------------------------------
-cd "$(dirname "$0")"
-
-info "Installing Python SDK..."
-cd sdk
-$PYTHON_CMD -m pip install -e . --quiet 2>/dev/null || {
-  warn "SDK pip install failed — you may need to create a venv first."
-}
-cd ..
-
-info "Installing MCP Server..."
-cd mcp-server
-$PYTHON_CMD -m pip install -e . --quiet 2>/dev/null || {
-  warn "MCP Server pip install failed — you may need to create a venv first."
-}
-cd ..
-
-ok "Python packages installed."
-
-# ---------------------------------------------------------------------------
-# Output .mcp.json config
-# ---------------------------------------------------------------------------
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo -e "${GREEN}Setup complete!${NC}"
-echo ""
-echo "Add this to your project's .mcp.json (or ~/.claude/.mcp.json for global):"
-echo ""
-echo -e "${YELLOW}"
-cat << JSON
-{
-  "mcpServers": {
-    "cf-browser": {
-      "type": "stdio",
-      "command": "${PYTHON_MCP_CMD}",
-      "args": ["-m", "cf_browser_mcp.server"],
-      "env": {
-        "CF_BROWSER_URL": "${WORKER_URL}",
-        "CF_BROWSER_API_KEY": "${API_KEY}"
-      }
-    }
-  }
-}
-JSON
-echo -e "${NC}"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "Quick test:"
-echo "  curl -X POST ${WORKER_URL}/markdown \\"
-echo "    -H 'Authorization: Bearer ${API_KEY}' \\"
-echo "    -H 'Content-Type: application/json' \\"
-echo "    -d '{\"url\": \"https://example.com\"}'"
-echo ""
-echo "Your API key (save this): ${API_KEY}"
-echo ""
+echo
+echo -e "${GREEN}CF Browser setup and live verification completed.${NC}"
+echo "Worker: ${WORKER_URL}"
+case "$MCP_REGISTRATION_STATUS" in
+  current)
+    echo "Private MCP config: ${MCP_CONFIG}"
+    echo "Claude Code: user-scoped server registered"
+    ;;
+  restored)
+    echo "Private MCP config: previous installation unchanged"
+    echo "Claude Code: previous user-scoped registration restored"
+    ;;
+  *)
+    echo "Private MCP config: ${MCP_CONFIG}"
+    echo "Claude Code: registration still required"
+    ;;
+esac
+echo "Credentials were not printed; the private config is mode 0600."
