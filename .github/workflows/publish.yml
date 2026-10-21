@@ -48,14 +48,15 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.package == 'mcp-server'
         run: python scripts/check_pypi_dependency.py
 
+      # Run from the repository root, exactly like ci.yml: from inside sdk/,
+      # Ruff resolves different settings for the mixed ../ paths.
       - name: Test SDK
-        working-directory: sdk
         run: |
-          pip install -e ".[dev]"
-          ruff format --check src tests ../examples ../scripts
-          ruff check src tests ../examples ../scripts
-          mypy src
-          pytest tests/ -q
+          python -m pip install -e './sdk[dev]'
+          python -m ruff format --check sdk/src sdk/tests examples scripts
+          python -m ruff check sdk/src sdk/tests examples scripts
+          python -m mypy --config-file sdk/pyproject.toml sdk/src
+          python -m pytest -q sdk/tests
 
       - name: Test Worker
         working-directory: worker

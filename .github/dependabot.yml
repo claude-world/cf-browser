@@ -6,6 +6,7 @@ updates:
       interval: monthly
     groups:
       worker-minor-and-patch:
+        patterns: ["*"]
         update-types: [minor, patch]
 
   - package-ecosystem: pip
@@ -14,8 +15,12 @@ updates:
       - /mcp-server
     schedule:
       interval: monthly
+    # The packages declare ">=" floors; only propose versions outside the range
+    # (for example a new mcp major), not routine floor bumps.
+    versioning-strategy: increase-if-necessary
     groups:
       python-minor-and-patch:
+        patterns: ["*"]
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions
@@ -24,4 +29,5 @@ updates:
       interval: monthly
     groups:
       actions-minor-and-patch:
+        patterns: ["*"]
         update-types: [minor, patch]
