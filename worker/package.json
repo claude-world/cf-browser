@@ -6,10 +6,9 @@
     "node": ">=22.0.0"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true,
     "fsevents@2.3.3": true,
-    "sharp@0.34.5": true,
-    "workerd@1.20260714.1": true
+    "esbuild@0.28.2": true,
+    "workerd@1.20261019.1": true
   },
   "scripts": {
     "dev": "wrangler dev",
@@ -19,13 +18,18 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^1.1.0",
-    "hono": "^4.12.30"
+    "@cloudflare/puppeteer": "^1.4.0",
+    "hono": "^4.13.13"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260718.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.112.0"
+    "@cloudflare/workers-types": "^5.20261021.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.151.3"
+  },
+  "overrides": {
+    "@cloudflare/puppeteer": {
+      "@puppeteer/browsers": "3.2.5"
+    }
   }
 }
