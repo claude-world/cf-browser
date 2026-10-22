@@ -7,6 +7,8 @@ Use [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/) (fo
 [![Tests](https://github.com/claude-world/cf-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/claude-world/cf-browser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<img src="assets/demo.gif" alt="Claude Code calling the cf-browser browser_markdown MCP tool on example.com and answering from the rendered page" width="809" />
+
 ## Choose a mode
 
 | | Direct mode | Worker mode |
